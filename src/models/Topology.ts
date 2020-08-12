@@ -7,10 +7,16 @@ class Topology {
     borders: Border[];
     tiles: Tile[];
 
-    constructor(cornerCount: number, borderCount: number, tileCount: number) {
-        this.corners = new Array(cornerCount);
-        this.borders = new Array(borderCount);
-        this.tiles = new Array(tileCount);
+    constructor(corners: Corner[], borders: Border[], tiles: Tile[]) {
+        this.corners = [...corners];
+        this.borders = [...borders];
+        this.tiles = [...tiles];
+    }
+
+    dispose() {
+        this.corners.splice(0, this.corners.length);
+        this.borders.splice(0, this.borders.length);
+        this.tiles.splice(0, this.tiles.length);
     }
 }
 

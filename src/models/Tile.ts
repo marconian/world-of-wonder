@@ -1,8 +1,9 @@
-import { Vector3, Ray, Plane, Sphere } from 'three';
+import { Vector3, Sphere } from 'three';
 import Corner from './Corner';
 import Border from './Border';
-import { intersectRayWithSphere } from '../utils';
+import { calculateTriangleArea } from '../utils';
 import Plate from './Plate';
+import { Node } from './MeshDescription';
 
 export type Biome = 'ocean' | 'oceanGlacier' | 'desert' | 'rainForest' | 'rocky' | 'plains' | 'grassland' | 'swamp' | 'deciduousForest' | 'tundra' | 'landGlacier' | 'coniferForest' | 'mountain' | 'snowyMountain' | 'snow';
 
@@ -10,10 +11,10 @@ export class Tile {
     id: number;
     position: Vector3;
     corners: Corner[];
-    borders: Border[];
-    tiles: Tile[];
+    borders: (Border | undefined)[];
+    tiles: (Tile | undefined)[];
     elevation: number;
-    boundingSphere?: Sphere;
+    boundingSphere: Sphere;
     averagePosition?: Vector3;
     plateMovement?: Vector3;
     normal?: Vector3;
@@ -33,31 +34,76 @@ export class Tile {
         this.temperature = 0;
         this.moisture = 0;
         this.area = 0;
+        this.boundingSphere = new Sphere();
     }
 
-    intersectRay(ray: Ray) {
-        if (this.boundingSphere && this.normal && this.averagePosition) {
-            if (intersectRayWithSphere(ray, this.boundingSphere)) {
-                const surface = new Plane().setFromNormalAndCoplanarPoint(this.normal, this.averagePosition);
-                if (surface.distanceToPoint(ray.origin) <= 0) return false;
-            
-                const denominator = surface.normal.dot(ray.direction);
-                if (denominator === 0) return false;
-            
-                const t = -(ray.origin.dot(surface.normal) + surface.constant) / denominator;
-                const point = ray.direction.clone().multiplyScalar(t).add(ray.origin);
-            
-                const origin = new Vector3(0, 0, 0);
-                for (let i = 0; i < this.corners.length; ++i) {
-                    const j = (i + 1) % this.corners.length;
-                    const side = new Plane().setFromCoplanarPoints(this.corners[j].position, this.corners[i].position, origin);
-            
-                    if (side.distanceToPoint(point) < 0) return false;
+    build(node: Node, borders: Border[], corners: Corner[]) {
+        for (let j = 0; j < node.f.length; j++) {
+            this.corners[j] = corners[node.f[j]];
+        }
+
+        for (let j = 0; j < node.e.length; j++) {
+            const border = borders[node.e[j]];
+            if (border.tiles[0] === this) {
+                for (let k = 0; k < this.corners.length; k++) {
+                    const corner0 = this.corners[k];
+                    const corner1 = this.corners[(k + 1) % this.corners.length];
+                    
+                    if (border.corners[1] === corner0 && border.corners[0] === corner1) {
+                        border.corners[0] = corner0;
+                        border.corners[1] = corner1;
+                    } else if (border.corners[0] !== corner0 || border.corners[1] !== corner1) {
+                        continue;
+                    }
+
+                    this.borders[k] = border;
+                    this.tiles[k] = border.oppositeTile(this);
+
+                    break;
+                }
+            } else {
+                for (let k = 0; k < this.corners.length; k++) {
+                    const corner0 = this.corners[k];
+                    const corner1 = this.corners[(k + 1) % this.corners.length];
+
+                    if (border.corners[0] === corner0 && border.corners[1] === corner1) {
+                        border.corners[1] = corner0;
+                        border.corners[0] = corner1;
+                    } else if (border.corners[1] !== corner0 || border.corners[0] !== corner1) {
+                        continue;
+                    }
+
+                    this.borders[k] = border;
+                    this.tiles[k] = border.oppositeTile(this);
+
+                    break;
                 }
             }
         }
-    
-        return false;
+
+        this.averagePosition = new Vector3(0, 0, 0);
+        for (let j = 0; j < this.corners.length; j++) {
+            this.averagePosition.add(this.corners[j].position);
+        }
+        this.averagePosition.multiplyScalar(1 / this.corners.length);
+
+        let maxDistanceToCorner = 0;
+        for (let j = 0; j < this.corners.length; j++) {
+            maxDistanceToCorner = Math.max(maxDistanceToCorner, this.corners[j].position.distanceTo(this.averagePosition));
+        }
+
+        let area = 0;
+        for (let j = 0; j < this.borders.length; j++) {
+            const border = this.borders[j];
+            if (border) {
+                area += calculateTriangleArea(this.position, border.corners[0].position, border.corners[1].position);
+            }
+        }
+        this.area = area;
+
+        this.normal = this.position.clone().normalize();
+
+        this.boundingSphere = new Sphere(this.averagePosition, maxDistanceToCorner);
     }
     
     toString() {

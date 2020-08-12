@@ -1,7 +1,7 @@
 // function saveToFileSystem(content) {
 //     const requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
 
-import { Vector3, Quaternion, Ray, Sphere } from 'three';
+import { Vector3, Quaternion, Ray, Sphere, Plane } from 'three';
 import XorShift128 from './XorShift128';
 
 //     requestFileSystem(window.TEMPORARY, content.length,
@@ -63,11 +63,11 @@ function intersectRayWithSphere(ray: Ray, sphere: Sphere) {
 }
 
 function calculateTriangleArea(pa: Vector3, pb: Vector3, pc: Vector3) {
-    const vab = new THREE.Vector3().subVectors(pb, pa);
-    const vac = new THREE.Vector3().subVectors(pc, pa);
-    const faceNormal = new THREE.Vector3().crossVectors(vab, vac);
-    const vabNormal = new THREE.Vector3().crossVectors(faceNormal, vab).normalize();
-    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(vabNormal, pa);
+    const vab = new Vector3().subVectors(pb, pa);
+    const vac = new Vector3().subVectors(pc, pa);
+    const faceNormal = new Vector3().crossVectors(vab, vac);
+    const vabNormal = new Vector3().crossVectors(faceNormal, vab).normalize();
+    const plane = new Plane().setFromNormalAndCoplanarPoint(vabNormal, pa);
     const height = plane.distanceToPoint(pc);
     const width = vab.length();
     const area = width * height * 0.5;

@@ -1,7 +1,32 @@
-.app, .scene {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
+.app {
+    &, .scene {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        right: 0;
+    }
+
+    .menu {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 10vh;
+        height: calc(100vh - 10px);
+        margin: 5px;
+        background-color: rgba(255, 255, 255, .1);
+        z-index: 1;
+    }
+
+    .loading {
+        position: absolute;
+        top: 0;
+        right: 0;
+        margin: 10px;
+        z-index: 1;
+    }
+
+    .scene {
+        z-index: 0;
+    }
 }
