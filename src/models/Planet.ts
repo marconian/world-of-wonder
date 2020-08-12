@@ -12,6 +12,10 @@ import Border from './Border';
 import Tile from './Tile';
 import { randomUnitVector } from '../utils';
 import Whorl from './Whorl';
+import * as Comlink from 'comlink';
+import { PlanetWorker } from '../workers/PlanetWorker';
+// eslint-disable-next-line import/no-webpack-loader-syntax
+import Worker from 'worker-loader!../workers/PlanetWorker';
 
 export type PlanetMode = 'terrain' | 'plates' | 'elevation' | 'temperature' | 'moisture';
 
@@ -172,24 +176,28 @@ export class Planet {
     }
     
     private async generatePlanetTopology() {
-        const corners = new Array<Corner>(this._mesh.faces.length);
+        //const corners = new Array<Corner>(this._mesh.faces.length);
         const borders = new Array<Border>(this._mesh.edges.length);
         const tiles = new Array<Tile>(this._mesh.nodes.length);
+
+        const worker = new Worker();
+        const obj = Comlink.wrap<PlanetWorker>(worker);
+        const corners = await obj.corners(this._mesh);
         
         const tasks: Promise<void>[] = [];
-        for (let i = 0; i < this._mesh.faces.length; i++) {
-            tasks.push(new Promise((resolve) => {
-                const face = this._mesh.faces[i];
-                if (face.centroid) {
-                    corners[i] = new Corner(i, face.centroid.clone(), face.e.length, face.e.length, face.n.length);
-                }
+        // for (let i = 0; i < this._mesh.faces.length; i++) {
+        //     tasks.push(new Promise((resolve) => {
+        //         const face = this._mesh.faces[i];
+        //         if (face.centroid) {
+        //             corners[i] = new Corner(i, face.centroid.clone(), face.e.length, face.e.length, face.n.length);
+        //         }
 
-                resolve();
-            }));
-        }
+        //         resolve();
+        //     }));
+        // }
         
-        await Promise.all(tasks);
-        tasks.splice(0, tasks.length);
+        // await Promise.all(tasks);
+        // tasks.splice(0, tasks.length);
 
         for (let i = 0; i < this._mesh.edges.length; i++) {
             tasks.push(new Promise((resolve) => {

@@ -1,33 +1,37 @@
 {
-  "compilerOptions": {
-    "target": "es6",
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "esnext"
-    ],
-    "allowJs": false,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "module": "esnext",
-    "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react",
-    "noImplicitReturns": true,
-    "noImplicitAny": true,
-    "noUnusedLocals": true,
-    "removeComments": true,
-    "strictNullChecks": true,
-    "downlevelIteration": true,
-    "allowUmdGlobalAccess": true,
-    "importHelpers": true
-  },
-  "include": [
-    "src"
-  ]
+    "compilerOptions": {
+        "target": "es6",
+        "lib": [
+            "dom",
+            "dom.iterable",
+            "esnext"
+        ],
+        "allowJs": false,
+        "skipLibCheck": true,
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "strict": true,
+        "forceConsistentCasingInFileNames": true,
+        "module": "esnext",
+        "moduleResolution": "node",
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "noEmit": true,
+        "jsx": "react",
+        "noImplicitReturns": true,
+        "noImplicitAny": true,
+        "noUnusedLocals": true,
+        "removeComments": true,
+        "strictNullChecks": true,
+        "downlevelIteration": true,
+        "allowUmdGlobalAccess": true,
+        "importHelpers": true,
+        "typeRoots": [
+            "./@types",
+            "node_modules/@types"
+        ]
+    },
+    "include": [
+        "src"
+    ]
 }
