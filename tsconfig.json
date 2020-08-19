@@ -4,7 +4,8 @@
         "lib": [
             "dom",
             "dom.iterable",
-            "esnext"
+            "esnext",
+            "webworker"
         ],
         "allowJs": false,
         "skipLibCheck": true,
@@ -27,11 +28,12 @@
         "allowUmdGlobalAccess": true,
         "importHelpers": true,
         "typeRoots": [
-            "./@types",
+            "@types",
             "node_modules/@types"
         ]
     },
     "include": [
+        "@types",
         "src"
     ]
 }

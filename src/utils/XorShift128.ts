@@ -53,6 +53,14 @@ class XorShift128 {
         this.z = (z ? z >>> 0 : 521288629);
         this.w = (w ? w >>> 0 : 88675123);
     }
+
+    index<T>(values: T[]) {
+        return values.length > 0 ? Math.floor(Math.pow(this.unit(), 2) * values.length) : undefined;
+    }
+
+    value<T>(values: T[]) {
+        return values.length > 0 ? values[Math.floor(Math.pow(this.unit(), 2) * values.length)] : undefined;
+    }
 }
 
 export default XorShift128;

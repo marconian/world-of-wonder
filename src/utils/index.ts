@@ -27,12 +27,12 @@ import XorShift128 from './XorShift128';
 //         function (error) {});
 // }
 
-function slerp(p0: Vector3, p1: Vector3, t: number) {
+export function slerp(p0: Vector3, p1: Vector3, t: number) {
     const omega = Math.acos(p0.dot(p1));
     return p0.clone().multiplyScalar(Math.sin((1 - t) * omega)).add(p1.clone().multiplyScalar(Math.sin(t * omega))).divideScalar(Math.sin(omega));
 }
 
-function randomUnitVector(random: XorShift128) {
+export function randomUnitVector(random: XorShift128) {
     const theta = random.real(0, Math.PI * 2);
     const phi = Math.acos(random.realInclusive(-1, 1));
     const sinPhi = Math.sin(phi);
@@ -42,7 +42,7 @@ function randomUnitVector(random: XorShift128) {
         Math.cos(phi));
 }
 
-function randomQuaternion(random: XorShift128) {
+export function randomQuaternion(random: XorShift128) {
     const theta = random.real(0, Math.PI * 2);
     const phi = Math.acos(random.realInclusive(-1, 1));
     const sinPhi = Math.sin(phi);
@@ -55,14 +55,14 @@ function randomQuaternion(random: XorShift128) {
         Math.cos(gamma));
 }
 
-function intersectRayWithSphere(ray: Ray, sphere: Sphere) {
+export function intersectRayWithSphere(ray: Ray, sphere: Sphere) {
     const v1 = sphere.center.clone().sub(ray.origin);
     const v2 = v1.clone().projectOnVector(ray.direction);
     const d = v1.distanceTo(v2);
     return (d <= sphere.radius);
 }
 
-function calculateTriangleArea(pa: Vector3, pb: Vector3, pc: Vector3) {
+export function calculateTriangleArea(pa: Vector3, pb: Vector3, pc: Vector3) {
     const vab = new Vector3().subVectors(pb, pa);
     const vac = new Vector3().subVectors(pc, pa);
     const faceNormal = new Vector3().crossVectors(vab, vac);
@@ -74,7 +74,7 @@ function calculateTriangleArea(pa: Vector3, pb: Vector3, pc: Vector3) {
     return area;
 }
 
-function accumulateArray<T>(array: T[], state: number, accumulator: (a: number, b: T) => number) {
+export function accumulateArray<T>(array: T[], state: number, accumulator: (a: number, b: T) => number) {
     let s = state;
     for (let i = 0; i < array.length; ++i) {
         s = accumulator(s, array[i]);
@@ -82,12 +82,12 @@ function accumulateArray<T>(array: T[], state: number, accumulator: (a: number, 
     return s;
 }
 
-function adjustRange(value: number, oldMin: number, oldMax: number, newMin: number, newMax: number) {
+export function adjustRange(value: number, oldMin: number, oldMax: number, newMin: number, newMax: number) {
     return (value - oldMin) / (oldMax - oldMin) * (newMax - newMin) + newMin;
 }
 
 //Adapted from http://stackoverflow.com/a/7616484/3874364
-function hashString(s: string) {
+export function hashString(s: string) {
     let hash = 0;
     const length = s.length;
     if (length === 0) return hash;
@@ -98,14 +98,3 @@ function hashString(s: string) {
     }
     return hash;
 }
-
-export {
-    slerp,
-    randomUnitVector,
-    randomQuaternion,
-    intersectRayWithSphere,
-    calculateTriangleArea,
-    accumulateArray,
-    adjustRange,
-    hashString
-};

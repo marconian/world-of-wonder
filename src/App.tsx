@@ -7,7 +7,10 @@ import './App.scss';
 import Tile from './models/Tile';
 import { adjustRange, hashString } from './utils';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faWind, faPlanetMoon, faWalking, faSunCloud, faSpinnerThird } from '@fortawesome/pro-light-svg-icons';
+import { faWind, faPlanetMoon, faWalking, faSunCloud, faSpinnerThird, faRaindrops, faMountains, faThermometerHalf, faVectorSquare, faSeedling } from '@fortawesome/pro-light-svg-icons';
+import { MeshDescription } from './models/MeshDescription';
+import { MeshWorker } from './workers/MeshWorker';
+import { wrap, releaseProxy } from 'comlink';
 
 interface AppState {
     planet?: Planet;
@@ -23,9 +26,9 @@ interface AppState {
     renderPlateBoundaries: boolean;
     renderPlateMovements: boolean;
     renderAirCurrents: boolean;
+    selection?: TileSelection
     loading: boolean;
 }
-
 
 interface TileSelection {
     tile: Tile;
@@ -58,7 +61,8 @@ class App extends Component<{}, AppState> {
     camera: PerspectiveCamera;
     directionalLight: DirectionalLight;
     
-    tileSelection?: TileSelection;
+    meshes: Record<number, MeshDescription>;
+    
     zoom = 1.0;
     zoomAnimationStartTime?: number;
     zoomAnimationDuration?: number;
@@ -83,14 +87,15 @@ class App extends Component<{}, AppState> {
         this.directionalLight = new DirectionalLight(0xFFFFFF);
         this.directionalLight.position.set(-3, 3, 7).normalize();
 
+        this.meshes = {};
+
         this.state = {
             subdivisions: 30,
             distortionLevel: 1,
             plateCount: 20,
-            oceanicRate: 0.7,
-            heatLevel: 1.0,
-            moistureLevel: 1.0,
-            seed: Date.now(),
+            oceanicRate: .7,
+            heatLevel: 1,
+            moistureLevel: .3,
             surfaceRenderMode: 'terrain',
             renderAirCurrents: false,
             renderPlateBoundaries: false,
@@ -126,6 +131,8 @@ class App extends Component<{}, AppState> {
             this.updateCamera();
 
             this.generatePlanetAsync();
+            // this.generatePlanetAsync().then(async () =>
+            //     await this.generateMeshes());
         }
             
         window.addEventListener('keyup', this.keyUpHandler, false);
@@ -153,12 +160,11 @@ class App extends Component<{}, AppState> {
             this.state.distortionLevel !== prevState.distortionLevel ||
             (!this.state.planet && prevState.planet)) {
 
-            this.generatePlanetAsync().then(() => 
-                this.setState({ loading: false }));
+            this.generatePlanetAsync();
         } else if (this.state.planet !== prevState.planet) {
             const old = this.scene.getObjectByName('planet');
             if (old) {
-                this.tileSelection = undefined;
+                this.setState({ selection: undefined });
                 this.scene.remove(old);
             }
 
@@ -168,6 +174,14 @@ class App extends Component<{}, AppState> {
 
             if (this.state.planet) {
                 this.displayPlanet();
+            }
+        }
+        if (this.state.selection !== prevState.selection) {
+            if (prevState.selection) {
+                this.planet?.renderData?.surface?.renderObject.remove(prevState.selection.renderObject);
+            }
+            if (this.state.selection) {
+                this.planet?.renderData?.surface?.renderObject.add(this.state.selection.renderObject);
             }
         }
     }
@@ -187,6 +201,8 @@ class App extends Component<{}, AppState> {
     }
 
     render(): JSX.Element {
+        const selection = this.state.selection?.tile;
+
         return (
             <div className="app" ref={(node) => this.appNode = node}>
                 <canvas className="scene" width={window.innerWidth} height={window.innerHeight} ref={(node) => this.sceneNode = node}
@@ -214,29 +230,13 @@ class App extends Component<{}, AppState> {
                             <FontAwesomeIcon icon={faWalking} />
                         </button>
                         <div className="btn-group mt-3 mx-3">
-                            <button type="button" className="btn btn-light"
-                                onClick={() => this.setState({ loading: true, planet: undefined })}>
-
-                                {this.state.subdivisions}
-                            </button>
-                            <button type="button" className="btn btn-light dropdown-toggle dropdown-toggle-split" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                                <span className="sr-only">Toggle Dropdown</span>
-                            </button>
-                            <div className="dropdown-menu">
-                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 10, loading: true})}>10</a>
-                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 20, loading: true})}>20</a>
-                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 30, loading: true})}>30</a>
-                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 40, loading: true})}>40</a>
-                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 50, loading: true})}>50</a>
-                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 60, loading: true})}>60</a>
-                            </div>
-                        </div>
-                        <div className="btn-group mt-3 mx-3">
-                            <button type="button" className="btn btn-light">
+                            <button type="button" className="btn btn-light text-truncate">
 
                                 {this.state.surfaceRenderMode}
                             </button>
-                            <button type="button" className="btn btn-light dropdown-toggle dropdown-toggle-split" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <button type="button" className="btn btn-light dropdown-toggle dropdown-toggle-split" 
+                                data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+
                                 <span className="sr-only">Toggle Dropdown</span>
                             </button>
                             <div className="dropdown-menu">
@@ -247,10 +247,58 @@ class App extends Component<{}, AppState> {
                                 <a className="dropdown-item" onClick={() => this.setState({ surfaceRenderMode: 'temperature' })}>temperature</a>
                             </div>
                         </div>
+                        <div className="btn-group mt-3 mx-3">
+                            <button type="button" className="btn btn-light text-truncate" disabled={this.state.loading}
+                                onClick={() => this.setState({ planet: undefined })}>
+
+                                {this.state.subdivisions}
+                            </button>
+                            <button type="button" className="btn btn-light dropdown-toggle dropdown-toggle-split" disabled={this.state.loading}
+                                data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+
+                                <span className="sr-only">Toggle Dropdown</span>
+                            </button>
+                            <div className="dropdown-menu">
+                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 10 })}>10</a>
+                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 20 })}>20</a>
+                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 30 })}>30</a>
+                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 40 })}>40</a>
+                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 50 })}>50</a>
+                                <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 60 })}>60</a>
+                            </div>
+                        </div>
+                        <div className="mt-3 mx-3 text-truncate">
+                            <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
+                                value={this.state.oceanicRate} onChange={(e) => this.setState({ oceanicRate: e.currentTarget.valueAsNumber })} />
+                        </div>
+                        <div className="mt-3 mx-3 text-truncate">
+                            <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
+                                value={this.state.moistureLevel} onChange={(e) => this.setState({ moistureLevel: e.currentTarget.valueAsNumber })} />
+                        </div>
+                        <div className="mt-3 mx-3 text-truncate">
+                            <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
+                                value={this.state.heatLevel} onChange={(e) => this.setState({ heatLevel: e.currentTarget.valueAsNumber })} />
+                        </div>
+                        <button type="button" className="btn btn-light mt-3 mx-3 text-truncate" disabled={this.state.loading}
+                            onClick={() => this.setState({ planet: undefined })}>
+
+                            Apply
+                        </button>
                     </div>
                 </div>
-                <div className={`loader ${!this.state.loading ? 'hidden' : ''}`}>
-                    <FontAwesomeIcon icon={faSpinnerThird} spin />
+                {selection ? (
+                    <div className="card selection-info text-light">
+                        <div className="card-body">
+                            <FontAwesomeIcon icon={faSeedling} /> {selection.biome} <br />
+                            <FontAwesomeIcon icon={faVectorSquare} /> {selection.area.toPrecision(2)} <br />
+                            <FontAwesomeIcon icon={faMountains} /> {selection.elevation.toPrecision(2)} <br />
+                            <FontAwesomeIcon icon={faThermometerHalf} /> {selection.temperature.toPrecision(2)} <br />
+                            <FontAwesomeIcon icon={faRaindrops} /> {selection.moisture.toPrecision(2)} <br />
+                        </div>
+                    </div>
+                ) : undefined}
+                <div className={`loader text-light ${!this.state.loading ? 'd-none' : ''}`}>
+                    <FontAwesomeIcon icon={faSpinnerThird} size="lg" spin />
                 </div>
             </div>
         );
@@ -285,12 +333,50 @@ class App extends Component<{}, AppState> {
         this.cameraLongitude = 0;
     }
 
+    async getMesh(subdivisions: number) {
+        if (!Object.keys(this.meshes).includes(subdivisions.toString())) {
+            const meshWorker = new Worker('./workers/MeshWorker', { type: 'module' });
+            const meshTools = wrap<MeshWorker>(meshWorker);
+
+            const seed: number = Date.now();
+            await meshTools.init(seed);
+            
+            let distortionRate: number;
+            if (this.state.distortionLevel < 0.25) {
+                distortionRate = adjustRange(this.state.distortionLevel, 0.00, 0.25, 0.000, 0.040);
+            } else if (this.state.distortionLevel < 0.50) {
+                distortionRate = adjustRange(this.state.distortionLevel, 0.25, 0.50, 0.040, 0.050);
+            } else if (this.state.distortionLevel < 0.75) {
+                distortionRate = adjustRange(this.state.distortionLevel, 0.50, 0.75, 0.050, 0.075);
+            } else {
+                distortionRate = adjustRange(this.state.distortionLevel, 0.75, 1.00, 0.075, 0.150);
+            }
+
+            this.meshes[subdivisions] = await meshTools.build(subdivisions, distortionRate);
+            await MeshDescription.revive(this.meshes[subdivisions]);
+    
+            meshTools[releaseProxy]();
+            meshWorker.terminate();
+        }
+
+        return this.meshes[subdivisions];
+    }
+
+    async generateMeshes() {
+        this.setState({ loading: true });
+
+        const tasks: Promise<MeshDescription>[] = [];
+        for (let s = 10; s <= 60; s += 10) {
+            tasks.push(this.getMesh(s));
+        }
+
+        await Promise.all(tasks);
+        
+        this.setState({ loading: false });
+    }
+
     async generatePlanetAsync() {
-        let distortionRate: number;
-        if (this.state.distortionLevel < 0.25) distortionRate = adjustRange(this.state.distortionLevel, 0.00, 0.25, 0.000, 0.040);
-        else if (this.state.distortionLevel < 0.50) distortionRate = adjustRange(this.state.distortionLevel, 0.25, 0.50, 0.040, 0.050);
-        else if (this.state.distortionLevel < 0.75) distortionRate = adjustRange(this.state.distortionLevel, 0.50, 0.75, 0.050, 0.075);
-        else distortionRate = adjustRange(this.state.distortionLevel, 0.75, 1.00, 0.075, 0.150);
+        this.setState({ loading: true });
     
         let seed: number = Date.now();
         if (this.state.seed) {
@@ -301,10 +387,10 @@ class App extends Component<{}, AppState> {
             }
         }
 
-        const planet = new Planet(seed);
+        const mesh = await this.getMesh(this.state.subdivisions);
+
+        const planet = new Planet(seed, mesh);
         await planet.build(
-            this.state.subdivisions, 
-            distortionRate, 
             this.state.plateCount, 
             this.state.oceanicRate, 
             this.state.heatLevel, 
@@ -312,7 +398,8 @@ class App extends Component<{}, AppState> {
         );
 
         this.setState({
-            planet: planet
+            planet: planet,
+            loading: false
         });
     }
     
@@ -413,15 +500,11 @@ class App extends Component<{}, AppState> {
     //     }
     // }
     
-    selectTile(tile: Tile) {
-        if (this.tileSelection) {
-            if (this.tileSelection.tile === tile) return;
-            this.deselectTile();
-        }
+    selectTile(tile?: Tile) {
+        const topology = this.state.planet?.topology;
+        if (topology && tile?.averagePosition) {
+            console.log(tile);
     
-        console.log(tile);
-
-        if (tile.averagePosition) {
             const outerColor = new Color(0x000000);
             const innerColor = new Color(0xFFFFFF);
         
@@ -429,7 +512,7 @@ class App extends Component<{}, AppState> {
         
             geometry.vertices.push(tile.averagePosition);
             for (let i = 0; i < tile.corners.length; i++) {
-                geometry.vertices.push(tile.corners[i].position);
+                geometry.vertices.push(topology.corners[tile.corners[i]].position);
                 geometry.faces.push(new Face3(i + 1, (i + 1) % tile.corners.length + 1, 0, tile.normal, [outerColor, outerColor, innerColor]));
             }
         
@@ -443,18 +526,15 @@ class App extends Component<{}, AppState> {
             material.polygonOffset = true;
             material.polygonOffsetFactor = -2;
             material.polygonOffsetUnits = -2;
-            this.tileSelection = {
+
+            const renderObject = new Mesh(geometry, material);
+
+            this.setState({ selection: {
                 tile: tile,
-                renderObject: new Mesh(geometry, material)
-            };
-            this.planet?.renderData?.surface?.renderObject.add(this.tileSelection.renderObject);
-        }
-    }
-    
-    deselectTile() {
-        if (this.tileSelection) {
-            this.planet?.renderData?.surface?.renderObject.remove(this.tileSelection.renderObject);
-            this.tileSelection = undefined;
+                renderObject: renderObject
+            }});
+        } else {
+            this.setState({ selection: undefined });
         }
     }
     
@@ -599,13 +679,7 @@ class App extends Component<{}, AppState> {
     
     displayPlanet() {
         if (this.planet) {
-            const old = this.scene.getObjectByName('planet');
-            if (old) {
-                this.tileSelection = undefined;
-                this.scene.remove(old);
-            } else {
-                this.sunTimeOffset = Math.PI * 2 * (1 / 12 - Date.now() / 60000);
-            }
+            this.sunTimeOffset = Math.PI * 2 * (1 / 12 - Date.now() / 60000);
         
             if (this.planet.renderData?.surface) {
                 this.scene.add(this.planet.renderData.surface.renderObject);
@@ -621,7 +695,7 @@ class App extends Component<{}, AppState> {
         
             console.log('Raw Seed', this.planet.seed);
             console.log('Planet Radius', this.planet.radius);
-            console.log('Statistics', this.planet.statistics);
+            console.log('Statistics', this.planet.statistics || '-');
         } else {
             console.log('No planet to render...');
         }

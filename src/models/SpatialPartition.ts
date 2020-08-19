@@ -1,12 +1,11 @@
 import { Sphere } from 'three';
-import Tile from './Tile';
 
 class SpatialPartition {
     boundingSphere: Sphere;
     partitions: SpatialPartition[];
-    tiles: Tile[];
+    tiles: number[];
 
-    constructor(boundingSphere: Sphere, partitions: SpatialPartition[], tiles: Tile[]) {
+    constructor(boundingSphere: Sphere, partitions: SpatialPartition[], tiles: number[]) {
         this.boundingSphere = boundingSphere;
         this.partitions = partitions;
         this.tiles = tiles;
