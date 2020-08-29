@@ -13,6 +13,7 @@ interface MoistureInfo {
     limit: number;
     rate: number;
     airInflow: number;
+    airOutflow: number;
 }
 interface AirInfo {
     outflow: number[];
@@ -23,9 +24,6 @@ interface AirInfo {
 class Corner {
     id: number;
     position: Vector3;
-    corners: number[];
-    borders: number[];
-    tiles: number[];
     distanceToPlateRoot?: number;
     distanceToPlateBoundary?: number;
     betweenPlates: boolean;
@@ -38,13 +36,11 @@ class Corner {
     humidity: number;
     moisture?: MoistureInfo;
     air: AirInfo;
+    water: AirInfo;
     
-    constructor(id: number, position: Vector3, cornerCount: number, borderCount: number, tileCount: number) {
+    constructor(id: number, position: Vector3) {
         this.id = id;
         this.position = position;
-        this.corners = new Array(cornerCount);
-        this.borders = new Array(borderCount);
-        this.tiles = new Array(tileCount);
         this.betweenPlates = false;
         this.pressure = 0;
         this.temperature = 0;
@@ -57,14 +53,15 @@ class Corner {
             speed: 0,
             direction: new Vector3()
         };
+        this.water = {
+            outflow: [],
+            speed: 0,
+            direction: new Vector3()
+        };
     }
 
     vectorTo(corner: Corner) {
         return corner.position.clone().sub(this.position);
-    }
-
-    toString() {
-        return `Corner ${this.id.toFixed(0)} < ${this.position.x.toFixed(0)}, ${this.position.y.toFixed(0)}, ${this.position.z.toFixed(0)} >`;
     }
 
     static async revive<T extends Corner | (Corner | undefined)[]>(value: T, deep?: boolean): Promise<T> {
@@ -80,11 +77,7 @@ class Corner {
             if (value instanceof Corner) {
                 if (value.position) (value.position as any).__proto__ = Vector3.prototype;
                 if (value.air.direction) (value.air.direction as any).__proto__ = Vector3.prototype;
-                // if (deep) {
-                //     await Corner.revive(value.corners);
-                //     await Border.revive(value.borders);
-                //     await Tile.revive(value.tiles);
-                // }
+                if (value.water.direction) (value.water.direction as any).__proto__ = Vector3.prototype;
             }
         }
 

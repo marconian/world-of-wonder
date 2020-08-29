@@ -7,7 +7,7 @@ import './App.scss';
 import Tile from './models/Tile';
 import { adjustRange, hashString } from './utils';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faWind, faPlanetMoon, faWalking, faSunCloud, faSpinnerThird, faRaindrops, faMountains, faThermometerHalf, faVectorSquare, faSeedling } from '@fortawesome/pro-light-svg-icons';
+import { faWind, faPlanetMoon, faWalking, faSunCloud, faSpinnerThird, faRaindrops, faMountains, faThermometerHalf, faVectorSquare, faSeedling, faWater } from '@fortawesome/pro-light-svg-icons';
 import { MeshDescription } from './models/MeshDescription';
 import { MeshWorker } from './workers/MeshWorker';
 import { wrap, releaseProxy } from 'comlink';
@@ -26,6 +26,7 @@ interface AppState {
     renderPlateBoundaries: boolean;
     renderPlateMovements: boolean;
     renderAirCurrents: boolean;
+    renderOceanicCurrents: boolean;
     selection?: TileSelection
     loading: boolean;
 }
@@ -42,7 +43,7 @@ for (let k = 0; k < 26; k++) KEY[String.fromCharCode(k + 65)] = k + 65;
 // const KEY_ENTER = 13;
 // const KEY_SHIFT = 16;
 // const KEY_ESCAPE = 27;
-const KEY_SPACE = 32;
+//const KEY_SPACE = 32;
 const KEY_LEFTARROW = 37;
 const KEY_UPARROW = 38;
 const KEY_RIGHTARROW = 39;
@@ -90,14 +91,15 @@ class App extends Component<{}, AppState> {
         this.meshes = {};
 
         this.state = {
-            subdivisions: 30,
+            subdivisions: 20,
             distortionLevel: 1,
             plateCount: 20,
             oceanicRate: .7,
             heatLevel: 1,
-            moistureLevel: .3,
+            moistureLevel: 1,
             surfaceRenderMode: 'terrain',
             renderAirCurrents: false,
+            renderOceanicCurrents: false,
             renderPlateBoundaries: false,
             renderPlateMovements: false,
             renderSunlight: true,
@@ -111,8 +113,6 @@ class App extends Component<{}, AppState> {
     }
 
     componentDidMount(): void {
-        //this.camera.position.z = 5;
-        
         if (this.sceneNode) {
             this.renderer = new WebGLRenderer({
                 canvas: this.sceneNode,
@@ -146,6 +146,9 @@ class App extends Component<{}, AppState> {
         }
         if (this.state.renderAirCurrents !== prevState.renderAirCurrents) {
             this.planet?.toggleAirCurrents(this.state.renderAirCurrents);
+        }
+        if (this.state.renderOceanicCurrents !== prevState.renderOceanicCurrents) {
+            this.planet?.toggleOceanicCurrents(this.state.renderOceanicCurrents);
         }
         if (this.state.renderPlateBoundaries !== prevState.renderPlateBoundaries) {
             this.planet?.togglePlateBoundaries(this.state.renderPlateBoundaries);
@@ -219,6 +222,11 @@ class App extends Component<{}, AppState> {
 
                             <FontAwesomeIcon icon={faWind} />
                         </button>
+                        <button type="button" className={`btn ${this.state.renderOceanicCurrents ? 'btn-primary' : 'btn-light'} mt-3 mx-3`}
+                            onClick={() => this.setState({ renderOceanicCurrents: !this.state.renderOceanicCurrents})}>
+
+                            <FontAwesomeIcon icon={faWater} />
+                        </button>
                         <button type="button" className={`btn ${this.state.renderPlateBoundaries ? 'btn-primary' : 'btn-light'} mt-3 mx-3`}
                             onClick={() => this.setState({ renderPlateBoundaries: !this.state.renderPlateBoundaries})}>
 
@@ -229,7 +237,7 @@ class App extends Component<{}, AppState> {
 
                             <FontAwesomeIcon icon={faWalking} />
                         </button>
-                        <div className="btn-group mt-3 mx-3">
+                        <div className="btn-group mt-3 px-3">
                             <button type="button" className="btn btn-light text-truncate">
 
                                 {this.state.surfaceRenderMode}
@@ -247,7 +255,7 @@ class App extends Component<{}, AppState> {
                                 <a className="dropdown-item" onClick={() => this.setState({ surfaceRenderMode: 'temperature' })}>temperature</a>
                             </div>
                         </div>
-                        <div className="btn-group mt-3 mx-3">
+                        <div className="btn-group mt-3 px-3">
                             <button type="button" className="btn btn-light text-truncate" disabled={this.state.loading}
                                 onClick={() => this.setState({ planet: undefined })}>
 
@@ -267,17 +275,32 @@ class App extends Component<{}, AppState> {
                                 <a className="dropdown-item" onClick={() => this.setState({ subdivisions: 60 })}>60</a>
                             </div>
                         </div>
-                        <div className="mt-3 mx-3 text-truncate">
+                        <div className="input-group mt-3 px-3 text-truncate">
                             <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
                                 value={this.state.oceanicRate} onChange={(e) => this.setState({ oceanicRate: e.currentTarget.valueAsNumber })} />
+                            <div className="input-group-append">
+                                <span className="input-group-text">
+                                    <FontAwesomeIcon icon={faVectorSquare} />
+                                </span>
+                            </div>
                         </div>
-                        <div className="mt-3 mx-3 text-truncate">
-                            <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
-                                value={this.state.moistureLevel} onChange={(e) => this.setState({ moistureLevel: e.currentTarget.valueAsNumber })} />
-                        </div>
-                        <div className="mt-3 mx-3 text-truncate">
+                        <div className="input-group mt-3 px-3 text-truncate">
                             <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
                                 value={this.state.heatLevel} onChange={(e) => this.setState({ heatLevel: e.currentTarget.valueAsNumber })} />
+                            <div className="input-group-append">
+                                <span className="input-group-text">
+                                    <FontAwesomeIcon icon={faThermometerHalf} />
+                                </span>
+                            </div>
+                        </div>
+                        <div className="input-group mt-3 px-3 text-truncate">
+                            <input type="number" className="form-control" disabled={this.state.loading} min={0} max={1} step={.1}
+                                value={this.state.moistureLevel} onChange={(e) => this.setState({ moistureLevel: e.currentTarget.valueAsNumber })} />
+                            <div className="input-group-append">
+                                <span className="input-group-text">
+                                    <FontAwesomeIcon icon={faRaindrops} />
+                                </span>
+                            </div>
                         </div>
                         <button type="button" className="btn btn-light mt-3 mx-3 text-truncate" disabled={this.state.loading}
                             onClick={() => this.setState({ planet: undefined })}>
@@ -287,13 +310,13 @@ class App extends Component<{}, AppState> {
                     </div>
                 </div>
                 {selection ? (
-                    <div className="card selection-info text-light">
+                    <div className="card selection-info text-light bg-dark">
                         <div className="card-body">
                             <FontAwesomeIcon icon={faSeedling} /> {selection.biome} <br />
                             <FontAwesomeIcon icon={faVectorSquare} /> {selection.area.toPrecision(2)} <br />
                             <FontAwesomeIcon icon={faMountains} /> {selection.elevation.toPrecision(2)} <br />
                             <FontAwesomeIcon icon={faThermometerHalf} /> {selection.temperature.toPrecision(2)} <br />
-                            <FontAwesomeIcon icon={faRaindrops} /> {selection.moisture.toPrecision(2)} <br />
+                            <FontAwesomeIcon icon={faRaindrops} /> {selection.humidity.toPrecision(2)} <br />
                         </div>
                     </div>
                 ) : undefined}
@@ -335,28 +358,36 @@ class App extends Component<{}, AppState> {
 
     async getMesh(subdivisions: number) {
         if (!Object.keys(this.meshes).includes(subdivisions.toString())) {
-            const meshWorker = new Worker('./workers/MeshWorker', { type: 'module' });
-            const meshTools = wrap<MeshWorker>(meshWorker);
-
-            const seed: number = Date.now();
-            await meshTools.init(seed);
-            
-            let distortionRate: number;
-            if (this.state.distortionLevel < 0.25) {
-                distortionRate = adjustRange(this.state.distortionLevel, 0.00, 0.25, 0.000, 0.040);
-            } else if (this.state.distortionLevel < 0.50) {
-                distortionRate = adjustRange(this.state.distortionLevel, 0.25, 0.50, 0.040, 0.050);
-            } else if (this.state.distortionLevel < 0.75) {
-                distortionRate = adjustRange(this.state.distortionLevel, 0.50, 0.75, 0.050, 0.075);
+            const storageKey = `planet_mesh_${subdivisions}`;
+            const storageValue = localStorage.getItem(storageKey);
+            if (storageValue) {
+                this.meshes[subdivisions] = JSON.parse(storageValue);
             } else {
-                distortionRate = adjustRange(this.state.distortionLevel, 0.75, 1.00, 0.075, 0.150);
+                const meshWorker = new Worker('./workers/MeshWorker', { type: 'module' });
+                const meshTools = wrap<MeshWorker>(meshWorker);
+    
+                const seed: number = Date.now();
+                await meshTools.init(seed);
+                
+                let distortionRate: number;
+                if (this.state.distortionLevel < 0.25) {
+                    distortionRate = adjustRange(this.state.distortionLevel, 0.00, 0.25, 0.000, 0.040);
+                } else if (this.state.distortionLevel < 0.50) {
+                    distortionRate = adjustRange(this.state.distortionLevel, 0.25, 0.50, 0.040, 0.050);
+                } else if (this.state.distortionLevel < 0.75) {
+                    distortionRate = adjustRange(this.state.distortionLevel, 0.50, 0.75, 0.050, 0.075);
+                } else {
+                    distortionRate = adjustRange(this.state.distortionLevel, 0.75, 1.00, 0.075, 0.150);
+                }
+    
+                this.meshes[subdivisions] = await meshTools.build(subdivisions, distortionRate);
+                //localStorage.setItem(storageKey, JSON.stringify(this.meshes[subdivisions]));
+
+                meshTools[releaseProxy]();
+                meshWorker.terminate();
             }
 
-            this.meshes[subdivisions] = await meshTools.build(subdivisions, distortionRate);
             await MeshDescription.revive(this.meshes[subdivisions]);
-    
-            meshTools[releaseProxy]();
-            meshWorker.terminate();
         }
 
         return this.meshes[subdivisions];
@@ -426,8 +457,12 @@ class App extends Component<{}, AppState> {
         if (left && !right) return -1;
         return 0;
     }
+
+    async update() {
+        await this.state.planet?.update();
+    }
     
-    animate() {
+    async animate() {
         if (this.renderer) {
             const currentRenderFrameTime = Date.now();
             const frameDuration = this.lastRenderFrameTime ? (currentRenderFrameTime - this.lastRenderFrameTime) * 0.001 : 0;
@@ -451,7 +486,7 @@ class App extends Component<{}, AppState> {
         
             const cameraZoomDelta = this.getZoomDelta();
             if (frameDuration > 0 && cameraZoomDelta !== 0) {
-                this.zoom = Math.max(0, Math.min(this.zoom + frameDuration * cameraZoomDelta * 0.5, 1));
+                this.zoom = Math.max(0, Math.min(this.zoom + frameDuration * cameraZoomDelta * 0.5, 1 + (this.planet ? 1 - this.planet.radius / 1000 : 0)));
                 cameraNeedsUpdated = true;
             }
         
@@ -474,10 +509,13 @@ class App extends Component<{}, AppState> {
             const sunTime = Math.PI * 2 * currentRenderFrameTime / 60000 + this.sunTimeOffset;
             this.directionalLight.position.set(Math.cos(sunTime), 0, Math.sin(sunTime)).normalize();
         
-            requestAnimationFrame(() => this.animate());
-            this.renderer.render(this.scene, this.camera);
-        
-            this.lastRenderFrameTime = currentRenderFrameTime;
+            requestAnimationFrame(async () => {
+                await this.update();
+                await this.animate();
+
+                this.renderer?.render(this.scene, this.camera);
+                this.lastRenderFrameTime = currentRenderFrameTime;
+            });
         }
     }
     
@@ -486,34 +524,21 @@ class App extends Component<{}, AppState> {
         this.renderer?.setSize(window.innerWidth, window.innerHeight);
     }
     
-    // zoomHandler(event) {
-    //     if (this.zoomAnimationStartTime) {
-    //         this.zoomAnimationStartTime = Date.now();
-    //         this.zoomAnimationStartValue = this.zoom;
-    //         this.zoomAnimationEndValue = Math.max(0, Math.min(this.zoomAnimationStartValue - event.deltaY * 0.04, 1));
-    //         this.zoomAnimationDuration = Math.abs(this.zoomAnimationStartValue - this.zoomAnimationEndValue) * 1000;
-    //     } else if (this.zoomAnimationEndValue) {
-    //         this.zoomAnimationStartTime = Date.now();
-    //         this.zoomAnimationStartValue = this.zoom;
-    //         this.zoomAnimationEndValue = Math.max(0, Math.min(this.zoomAnimationEndValue - event.deltaY * 0.04, 1));
-    //         this.zoomAnimationDuration = Math.abs(this.zoomAnimationStartValue - this.zoomAnimationEndValue) * 1000;
-    //     }
-    // }
-    
     selectTile(tile?: Tile) {
         const topology = this.state.planet?.topology;
-        if (topology && tile?.averagePosition) {
+        if (topology && tile) {
             console.log(tile);
     
-            const outerColor = new Color(0x000000);
+            const outerColor = new Color(0xFF0000);
             const innerColor = new Color(0xFFFFFF);
         
             const geometry = new Geometry();
         
-            geometry.vertices.push(tile.averagePosition);
-            for (let i = 0; i < tile.corners.length; i++) {
-                geometry.vertices.push(topology.corners[tile.corners[i]].position);
-                geometry.faces.push(new Face3(i + 1, (i + 1) % tile.corners.length + 1, 0, tile.normal, [outerColor, outerColor, innerColor]));
+            geometry.vertices.push(tile.position);
+            const corners = topology.corners(tile);
+            for (let i = 0; i < corners.length; i++) {
+                geometry.vertices.push(corners[i].position);
+                geometry.faces.push(new Face3(i + 1, (i + 1) % corners.length + 1, 0, tile.normal, [outerColor, outerColor, innerColor]));
             }
         
             geometry.computeBoundingSphere();
@@ -562,9 +587,9 @@ class App extends Component<{}, AppState> {
                         obj.geometry.vertices[intersect.face.c]
                     ];
                     
-                    if (this.planet?.topology?.tiles) {
-                        const tiles = this.planet.topology.tiles.filter(t => {
-                            const p = t.averagePosition;
+                    if (this.planet?.topology) {
+                        const tiles = this.planet.topology.tiles().filter(t => {
+                            const p = t.position;
                             return p && vertices.filter(v => v.equals(p)).length > 0;
                         });
 
@@ -622,56 +647,24 @@ class App extends Component<{}, AppState> {
             this.pressedKeys[event.keyCode] = false;
             event.preventDefault();
             break;
-        case KEY_SPACE:
-            this.generatePlanetAsync();
-            event.preventDefault();
-            break;
         case KEY['1']:
-            this.setState({ subdivisions: 20 });
-            event.preventDefault();
-            break;
-        case KEY['2']:
-            this.setState({ subdivisions: 40 });
-            event.preventDefault();
-            break;
-        case KEY['3']:
-            this.setState({ subdivisions: 60 });
-            event.preventDefault();
-            break;
-        case KEY['5']:
             this.setState({ surfaceRenderMode: 'terrain' });
             event.preventDefault();
             break;
-        case KEY['6']:
+        case KEY['2']:
             this.setState({ surfaceRenderMode: 'plates' });
             event.preventDefault();
             break;
-        case KEY['7']:
+        case KEY['3']:
             this.setState({ surfaceRenderMode: 'elevation' });
             event.preventDefault();
             break;
-        case KEY['8']:
+        case KEY['4']:
             this.setState({ surfaceRenderMode: 'temperature' });
             event.preventDefault();
             break;
-        case KEY['9']:
+        case KEY['5']:
             this.setState({ surfaceRenderMode: 'moisture' });
-            event.preventDefault();
-            break;
-        case KEY.U:
-            this.setState({ renderSunlight: !this.state.renderSunlight });
-            event.preventDefault();
-            break;
-        case KEY.I:
-            this.setState({ renderPlateBoundaries: !this.state.renderPlateBoundaries });
-            event.preventDefault();
-            break;
-        case KEY.O:
-            this.setState({ renderPlateMovements: !this.state.renderPlateMovements });
-            event.preventDefault();
-            break;
-        case KEY.P:
-            this.setState({ renderAirCurrents: !this.state.renderAirCurrents });
             event.preventDefault();
             break;
         }
@@ -687,10 +680,12 @@ class App extends Component<{}, AppState> {
         
             this.planet?.setSurface(this.state.surfaceRenderMode);
             this.planet?.toggleAirCurrents(this.state.renderAirCurrents);
+            this.planet?.toggleOceanicCurrents(this.state.renderOceanicCurrents);
             this.planet?.togglePlateBoundaries(this.state.renderPlateBoundaries);
             this.planet?.togglePlateMovements(this.state.renderPlateMovements);
             this.planet?.toggleSunlight(this.state.renderSunlight);
         
+            this.zoom = 1 + (1 - this.planet.radius / 1000);
             this.updateCamera();
         
             console.log('Raw Seed', this.planet.seed);

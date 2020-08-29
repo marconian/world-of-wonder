@@ -5,6 +5,7 @@ export interface RenderData {
     plateBoundaries?: RenderPlateBoundaries;
     plateMovements?: RenderPlateMovement;
     airCurrents?: RenderAirCurrents;
+    oceanicCurrents?: RenderAirCurrents;
 }
 
 export interface RenderSurface {

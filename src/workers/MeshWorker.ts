@@ -56,7 +56,7 @@ export class MeshWorker {
             const p1 = this.nodes[face.n[1]].p;
             const p2 = this.nodes[face.n[2]].p;
 
-            face.centroid = this.calculateFaceCentroid(p0, p1, p2).multiplyScalar(-1);
+            face.centroid = this.calculateFaceCentroid(p0, p1, p2);
         }
 
         for (let i = 0; i < this.nodes.length; i++) {
@@ -85,18 +85,18 @@ export class MeshWorker {
 
         this.nodes.splice(0, this.nodes.length);
         this.nodes.push(
-            new Node(new Vector3(0, +dv, +du)),
-            new Node(new Vector3(0, +dv, -du)),
-            new Node(new Vector3(0, -dv, +du)),
             new Node(new Vector3(0, -dv, -du)),
-            new Node(new Vector3(+du, 0, +dv)),
-            new Node(new Vector3(-du, 0, +dv)),
-            new Node(new Vector3(+du, 0, -dv)),
+            new Node(new Vector3(0, -dv, +du)),
+            new Node(new Vector3(0, +dv, -du)),
+            new Node(new Vector3(0, +dv, +du)),
             new Node(new Vector3(-du, 0, -dv)),
-            new Node(new Vector3(+dv, +du, 0)),
-            new Node(new Vector3(+dv, -du, 0)),
+            new Node(new Vector3(+du, 0, -dv)),
+            new Node(new Vector3(-du, 0, +dv)),
+            new Node(new Vector3(+du, 0, +dv)),
+            new Node(new Vector3(-dv, -du, 0)),
             new Node(new Vector3(-dv, +du, 0)),
-            new Node(new Vector3(-dv, -du, 0))
+            new Node(new Vector3(+dv, -du, 0)),
+            new Node(new Vector3(+dv, +du, 0))
         );
     
         this.edges.splice(0, this.edges.length);

@@ -1,31 +1,5 @@
-// function saveToFileSystem(content) {
-//     const requestFileSystem = window.requestFileSystem || window.webkitRequestFileSystem;
-
-import { Vector3, Quaternion, Ray, Sphere, Plane } from 'three';
+import { Vector3, Quaternion, Ray, Sphere } from 'three';
 import XorShift128 from './XorShift128';
-
-//     requestFileSystem(window.TEMPORARY, content.length,
-//         function (fs) {
-//             fs.root.getFile('planetMesh.js', {
-//                     create: true
-//                 },
-//                 function (fileEntry) {
-//                     fileEntry.createWriter(
-//                         function (fileWriter) {
-//                             fileWriter.addEventListener('writeend',
-//                                 function () {
-//                                     $('body').append('<a href="' + fileEntry.toURL() + '" download="planetMesh.js" target="_blank">Mesh Data</a>');
-//                                     $('body>a').focus();
-//                                 }, false);
-
-//                             fileWriter.write(new Blob([content]));
-//                         },
-//                         function (error) {});
-//                 },
-//                 function (error) {});
-//         },
-//         function (error) {});
-// }
 
 export function slerp(p0: Vector3, p1: Vector3, t: number) {
     const omega = Math.acos(p0.dot(p1));
@@ -62,15 +36,16 @@ export function intersectRayWithSphere(ray: Ray, sphere: Sphere) {
     return (d <= sphere.radius);
 }
 
-export function calculateTriangleArea(pa: Vector3, pb: Vector3, pc: Vector3) {
-    const vab = new Vector3().subVectors(pb, pa);
-    const vac = new Vector3().subVectors(pc, pa);
-    const faceNormal = new Vector3().crossVectors(vab, vac);
-    const vabNormal = new Vector3().crossVectors(faceNormal, vab).normalize();
-    const plane = new Plane().setFromNormalAndCoplanarPoint(vabNormal, pa);
-    const height = plane.distanceToPoint(pc);
-    const width = vab.length();
-    const area = width * height * 0.5;
+export function calculateTriangleArea(p1: Vector3, p2: Vector3, p3: Vector3) {
+    const points = [p1.clone(), p2.clone(), p3.clone()]
+        .sort((a, b) => a.distanceTo(b));
+
+    const b = points[0].distanceTo(points[1]);
+    const c = points[2].distanceTo(points[1]);
+    const angle = Math.atan2(b, c);
+
+    const area = b * c * .5 * Math.sin(angle);
+
     return area;
 }
 

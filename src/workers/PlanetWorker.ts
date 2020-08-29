@@ -2,13 +2,13 @@ import { MeshDescription } from '../models/MeshDescription';
 import Corner from '../models/Corner';
 import { expose } from 'comlink';
 import Border from '../models/Border';
-import Tile from '../models/Tile';
 import { Vector3, Color } from 'three';
 import Topology from '../models/Topology';
 import Plate from '../models/Plate';
 import XorShift128 from '../utils/XorShift128';
 import { randomUnitVector } from '../utils';
 import Whorl from '../models/Whorl';
+import Tile from '../models/Tile';
 
 interface ElevationBorderQueueItem {
     border: Border;
@@ -24,21 +24,8 @@ interface ElevationBorderQueueItem {
     }
 }
 
-interface AirHeatResult {
-    corners: number[];
-    airHeat: number;
-}
-
-interface AirMoistureResult {
-    corners: number[];
-    airMoisture: number;
-}
-
 export class PlanetWorker {
     mesh?: MeshDescription;
-    readonly corners: Corner[] = [];
-    readonly borders: Border[] = [];
-    readonly tiles: Tile[] = [];
     topology?: Topology;
     plates: Plate[] = [];
     radius: number = 0;
@@ -55,84 +42,9 @@ export class PlanetWorker {
     }
     
     async generateTopology() {
-        this.corners.splice(0, this.corners.length);
-        this.borders.splice(0, this.borders.length);
-        this.tiles.splice(0, this.tiles.length);
-
         if (this.mesh) {
-            for (let i = 0; i < this.mesh.faces.length; i++) {
-                const face = this.mesh.faces[i];
-                this.corners.push(new Corner(i, face.centroid.clone().multiplyScalar(this.radius), face.e.length, face.e.length, face.n.length));
-            }
-            
-            for (let i = 0; i < this.mesh.edges.length; i++) {
-                this.borders.push(new Border(i, 2, 4, 2));
-            }
-            
-            for (let i = 0; i < this.mesh.nodes.length; i++) {
-                const node = this.mesh.nodes[i];
-                this.tiles.push(new Tile(i, node.p.clone().multiplyScalar(this.radius), node.f.length, node.e.length, node.e.length));
-            }
-    
-            for (let i = 0; i < this.corners.length; i++) {
-                const corner = this.corners[i];
-                const face = this.mesh.faces[i];
-                for (let j = 0; j < face.e.length; j++) {
-                    corner.borders[j] = face.e[j];
-                }
-                for (let j = 0; j < face.n.length; j++) {
-                    corner.tiles[j] = face.n[j];
-                }
-            }
-                
-            for (let i = 0; i < this.borders.length; i++) {
-                const border = this.borders[i];
-                const edge = this.mesh.edges[i];
-                const averageCorner = new Vector3(0, 0, 0);
-    
-                let n = 0;
-                for (let j = 0; j < edge.f.length; j++) {
-                    const corner = this.corners[edge.f[j]];
-                    averageCorner.add(corner.position);
-                    
-                    border.corners[j] = edge.f[j];
-    
-                    for (let k = 0; k < corner.borders.length; k++) {
-                        if (corner.borders[k] !== i) {
-                            border.borders[n++] = corner.borders[k];
-                        }
-                    }
-                }
-    
-                border.midpoint = averageCorner.multiplyScalar(1 / border.corners.length);
-                
-                for (let j = 0; j < edge.n.length; j++) {
-                    border.tiles[j] = edge.n[j];
-                }
-            }
-        
-            for (let i = 0; i < this.corners.length; i++) {
-                const corner = this.corners[i];
-                for (let j = 0; j < corner.borders.length; j++) {
-                    corner.corners[j] = this.borders[corner.borders[j]].oppositeCorner(i);
-                }
-            }
-            
-            for (let i = 0; i < this.tiles.length; i++) {
-                const tile = this.tiles[i];
-                tile.build(this.mesh.nodes[i], this.tiles, this.borders, this.corners);
-            }
-                
-            for (let i = 0; i < this.corners.length; i++) {
-                const corner = this.corners[i];
-                corner.area = 0;
-                for (let j = 0; j < corner.tiles.length; j++) {
-                    corner.area += this.tiles[corner.tiles[j]].area / this.tiles[corner.tiles[j]].corners.length;
-                }
-            }
+            this.topology = new Topology(this.mesh, this.radius);
         }
-    
-        this.topology = new Topology(this.corners, this.borders, this.tiles);
 
         return this.topology;
     }
@@ -150,18 +62,17 @@ export class PlanetWorker {
         const topology = this.topology;
         if (topology) {
             const plates: Plate[] = [];
-            const used: number[] = [];
-            const remaining: number[] = topology.tiles.map((v, i) => i);
+            const tiles = topology.tiles();
 
             for (let i = 0; i < plateCount; i++) {
                 let cornerIndex: number = 0;
 
                 let adjacent = true;
                 while (adjacent) {
-                    cornerIndex = this.random.integerExclusive(0, topology.corners.length);
-                    const tiles = topology.corners[cornerIndex].tiles;
-                    adjacent = plates.filter(p => topology.corners[p.root].tiles
-                        .filter(t => tiles.includes(t)).length > 0).length > 0;
+                    cornerIndex = this.random.integerExclusive(0, topology.corners().length);
+                    const cornerTiles = topology.tiles(topology.corners()[cornerIndex]);
+                    adjacent = plates.filter(p => topology.tiles(topology.corners()[p.root])
+                        .filter(t => cornerTiles.includes(t)).length > 0).length > 0;
                 }
 
                 const oceanic = (this.random.unit() < oceanicRate);
@@ -177,43 +88,54 @@ export class PlanetWorker {
                 plates.push(plate);
             }
 
+            this.plates = plates;
+
             for (let plateIndex = 0; plateIndex < plates.length; plateIndex++) {
                 const plate = plates[plateIndex];
-                const corner = topology.corners[plate.root];
-                plate.tiles.push(...corner.tiles);
+                const corner = topology.corners()[plate.root];
+                const cornerTiles = topology.tiles(corner);
 
-                for (const tileIndex of corner.tiles) {
-                    const tile = topology.tiles[tileIndex];
+                for (const tile of cornerTiles) {
+                    const tileIndex = tiles.indexOf(tile);
+                    plate.tiles.push(tileIndex);
                     tile.plate = plateIndex;
-
-                    used.push(tileIndex);
-                    remaining.splice(remaining.indexOf(tileIndex), 1);
                 }
             }
 
-            while (remaining.length > 0) {
+            let remaining = true;
+            while (remaining) {
                 const plateIndex = this.random.index(plates);
-                if (plateIndex) {
+                if (plateIndex !== undefined) {
                     const plate = plates[plateIndex];
-                    const tileIndex = this.random.value(plate.tiles.map(t => this.random.value(topology.tiles[t].tiles
-                        .filter(st => st && !topology.tiles[st].plate) as number[]))
-                        .filter(t => t));
+                    const unassigned = plate.tiles.map(t => topology.tiles()[t])
+                        .map(t => topology.tiles(t).filter(st => st.plate === undefined))
+                        .filter(a => a.length > 0)
+                        .map(a => this.random.value(a) as Tile);
 
-                    if (tileIndex) {
-                        const tile = topology.tiles[tileIndex];
-                        tile.plate = plateIndex;
-                        
+                    const tile = this.random.value(unassigned);
+                    if (tile) {
+                        const tileIndex = topology.tiles().indexOf(tile);
                         plate.tiles.push(tileIndex);
-    
-                        used.push(tileIndex);
-                        remaining.splice(remaining.indexOf(tileIndex), 1);
+                        tile.plate = plateIndex;
                     }
                 }
-            }
 
-            this.plates = plates;
+                remaining = tiles.filter(t => t.plate === undefined).length > 0;
+            }
         
             this.calculateCornerDistancesToPlateRoot();
+            this.identifyBoundaryBorders();
+
+            for (const plate of plates) {
+                plate.area = plate.tiles.map(t => topology.tiles()[t].area)
+                    .reduce((a, b) => a + b);
+
+                if (plate.boundaryBorders.length > 0) {
+                    plate.circumference = plate.boundaryBorders.map(b => topology.borders()[b])
+                        .map(b => topology.corners(b)[0].position.distanceTo(topology.corners(b)[1].position))
+                        .reduce((a, b) => a + b);
+                }
+            }
         }
     }
     
@@ -225,13 +147,16 @@ export class PlanetWorker {
     
             const distanceCornerQueue: CornerQueueItem[] = [];
             for (let i = 0; i < plates.length; i++) {
-                const corner = topology.corners[plates[i].root];
+                const corner = topology.corners()[plates[i].root];
+                const corners = topology.corners(corner);
+
                 corner.distanceToPlateRoot = 0;
-    
-                for (let j = 0; j < corner.corners.length; j++) {
+                for (let j = 0; j < corners.length; j++) {
+                    const border = topology.borders(corner)[j];
+                    
                     distanceCornerQueue.push({
-                        corner: topology.corners[corner.corners[j]],
-                        distanceToPlateRoot: topology.borders[corner.borders[j]].length(topology.corners)
+                        corner: corners[j],
+                        distanceToPlateRoot: topology.length(border)
                     });
                 }
             }
@@ -247,11 +172,15 @@ export class PlanetWorker {
                 const corner = front.corner;
                 const distanceToPlateRoot = front.distanceToPlateRoot;
                 if (!corner.distanceToPlateRoot || corner.distanceToPlateRoot > distanceToPlateRoot) {
+                    const corners = topology.corners(corner);
+
                     corner.distanceToPlateRoot = distanceToPlateRoot;
-                    for (let j = 0; j < corner.corners.length; j++) {
+                    for (let j = 0; j < corners.length; j++) {
+                        const border = topology.borders(corner)[j];
+
                         distanceCornerQueue.push({
-                            corner: topology.corners[corner.corners[j]],
-                            distanceToPlateRoot: distanceToPlateRoot + topology.borders[corner.borders[j]].length(topology.corners)
+                            corner: corners[j],
+                            distanceToPlateRoot: topology.length(border)
                         });
                     }
                 }
@@ -263,8 +192,6 @@ export class PlanetWorker {
     
     private generatePlanetElevation() {
         if (this.topology) {
-            this.identifyBoundaryBorders();
-    
             const boundaryCorners: number[] = this.collectBoundaryCorners();
             const boundaryCornerInnerBorderIndexes = this.calculatePlateBoundaryStress(boundaryCorners);
     
@@ -278,16 +205,16 @@ export class PlanetWorker {
     
     private identifyBoundaryBorders() {
         if (this.topology) {
-            for (let i = 0; i < this.topology.borders.length; i++) {
-                const border = this.topology.borders[i];
-                const plate0 = this.topology.tiles[border.tiles[0]].plate;
-                const plate1 = this.topology.tiles[border.tiles[1]].plate;
+            for (let i = 0; i < this.topology.borders().length; i++) {
+                const border = this.topology.borders()[i];
+                const plate0 = this.topology.tiles(border)[0].plate;
+                const plate1 = this.topology.tiles(border)[1].plate;
 
                 if (plate0 && plate1 && plate0 !== plate1) {
                     border.betweenPlates = true;
 
-                    this.topology.corners[border.corners[0]].betweenPlates = true;
-                    this.topology.corners[border.corners[1]].betweenPlates = true;
+                    this.topology.corners(border)[0].betweenPlates = true;
+                    this.topology.corners(border)[1].betweenPlates = true;
 
                     this.plates[plate0].boundaryBorders.push(i);
                     this.plates[plate1].boundaryBorders.push(i);
@@ -299,11 +226,11 @@ export class PlanetWorker {
     private collectBoundaryCorners() {
         const boundaryCorners: number[] = [];
         if (this.topology) {
-            for (let j = 0; j < this.topology.corners.length; j++) {
-                const corner = this.topology.corners[j];
-                const plate0 = this.topology.tiles[corner.tiles[0]].plate;
-                const plate1 = this.topology.tiles[corner.tiles[1]].plate;
-                const plate2 = this.topology.tiles[corner.tiles[2]].plate;
+            for (let j = 0; j < this.topology.corners().length; j++) {
+                const corner = this.topology.corners()[j];
+                const plate0 = this.topology.tiles(corner)[0].plate;
+                const plate1 = this.topology.tiles(corner)[1].plate;
+                const plate2 = this.topology.tiles(corner)[2].plate;
 
                 if (corner.betweenPlates && plate0 && plate1) {
                     boundaryCorners.push(j);
@@ -327,13 +254,17 @@ export class PlanetWorker {
 
         if (this.topology) {
             for (let i = 0; i < boundaryCorners.length; i++) {
-                const corner = this.topology.corners[boundaryCorners[i]];
+                const corner = this.topology.corners()[boundaryCorners[i]];
+                const corners = this.topology.corners(corner);
+                const borders = this.topology.borders(corner);
+                const tiles = this.topology.tiles(corner);
+
                 corner.distanceToPlateBoundary = 0;
         
                 let innerBorder;
                 let innerBorderIndex;
-                for (let j = 0; j < corner.borders.length; j++) {
-                    const border = this.topology.borders[corner.borders[j]];
+                for (let j = 0; j < borders.length; j++) {
+                    const border = borders[j];
                     if (!border.betweenPlates) {
                         innerBorder = border;
                         innerBorderIndex = j;
@@ -343,35 +274,35 @@ export class PlanetWorker {
         
                 if (innerBorder && innerBorderIndex) {
                     boundaryCornerInnerBorderIndexes[i] = innerBorderIndex;
-                    const outerBorder0 = this.topology.borders[corner.borders[(innerBorderIndex + 1) % corner.borders.length]];
-                    const outerBorder1 = this.topology.borders[corner.borders[(innerBorderIndex + 2) % corner.borders.length]];
-                    const farCorner0 = this.topology.corners[outerBorder0.oppositeCorner(boundaryCorners[i])];
-                    const farCorner1 = this.topology.corners[outerBorder1.oppositeCorner(boundaryCorners[i])];
-                    const plate0 = this.topology.tiles[innerBorder.tiles[0]].plate;
-                    const plate1 = this.topology.tiles[outerBorder0.tiles[0]].plate !== plate0 ? this.topology.tiles[outerBorder0.tiles[0]].plate : this.topology.tiles[outerBorder0.tiles[1]].plate;
+                    const outerBorder0 = borders[(innerBorderIndex + 1) % borders.length];
+                    const outerBorder1 = borders[(innerBorderIndex + 2) % borders.length];
+                    const farCorner0 = this.topology.opposite(corner, outerBorder0);
+                    const farCorner1 = this.topology.opposite(corner, outerBorder1);
+                    const plate0 = this.topology.tiles(innerBorder)[0].plate;
+                    const plate1 = this.topology.tiles(outerBorder0)[0].plate !== plate0 ? this.topology.tiles(outerBorder0)[0].plate : this.topology.tiles(outerBorder0)[1].plate;
                     const boundaryVector = farCorner0.vectorTo(farCorner1);
                     const boundaryNormal = boundaryVector.clone().cross(corner.position);
                     if (plate0 && plate1) {
-                        const stress = this.calculateStress(this.plates[plate0].calculateMovement(this.topology.corners, corner.position), this.plates[plate1].calculateMovement(this.topology.corners, corner.position), boundaryVector, boundaryNormal);
+                        const stress = this.calculateStress(this.plates[plate0].calculateMovement(this.topology.corners(), corner.position), this.plates[plate1].calculateMovement(this.topology.corners(), corner.position), boundaryVector, boundaryNormal);
                         corner.pressure = stress.pressure;
                         corner.shear = stress.shear;
                     }
                 } else {
                     boundaryCornerInnerBorderIndexes[i] = undefined;
-                    const plate0 = this.topology.tiles[corner.tiles[0]].plate;
-                    const plate1 = this.topology.tiles[corner.tiles[1]].plate;
-                    const plate2 = this.topology.tiles[corner.tiles[2]].plate;
-                    const boundaryVector0 = this.topology.corners[corner.corners[0]].vectorTo(corner);
-                    const boundaryVector1 = this.topology.corners[corner.corners[1]].vectorTo(corner);
-                    const boundaryVector2 = this.topology.corners[corner.corners[2]].vectorTo(corner);
+                    const plate0 = tiles[0].plate;
+                    const plate1 = tiles[1].plate;
+                    const plate2 = tiles[2].plate;
+                    const boundaryVector0 = corners[0].vectorTo(corner);
+                    const boundaryVector1 = corners[1].vectorTo(corner);
+                    const boundaryVector2 = corners[2].vectorTo(corner);
                     const boundaryNormal0 = boundaryVector0.clone().cross(corner.position);
                     const boundaryNormal1 = boundaryVector1.clone().cross(corner.position);
                     const boundaryNormal2 = boundaryVector2.clone().cross(corner.position);
     
                     if (plate0 && plate1 && plate2) {
-                        const stress0 = this.calculateStress(this.plates[plate0].calculateMovement(this.topology.corners, corner.position), this.plates[plate1].calculateMovement(this.topology.corners, corner.position), boundaryVector0, boundaryNormal0);
-                        const stress1 = this.calculateStress(this.plates[plate1].calculateMovement(this.topology.corners, corner.position), this.plates[plate2].calculateMovement(this.topology.corners, corner.position), boundaryVector1, boundaryNormal1);
-                        const stress2 = this.calculateStress(this.plates[plate2].calculateMovement(this.topology.corners, corner.position), this.plates[plate0].calculateMovement(this.topology.corners, corner.position), boundaryVector2, boundaryNormal2);
+                        const stress0 = this.calculateStress(this.plates[plate0].calculateMovement(this.topology.corners(), corner.position), this.plates[plate1].calculateMovement(this.topology.corners(), corner.position), boundaryVector0, boundaryNormal0);
+                        const stress1 = this.calculateStress(this.plates[plate1].calculateMovement(this.topology.corners(), corner.position), this.plates[plate2].calculateMovement(this.topology.corners(), corner.position), boundaryVector1, boundaryNormal1);
+                        const stress2 = this.calculateStress(this.plates[plate2].calculateMovement(this.topology.corners(), corner.position), this.plates[plate0].calculateMovement(this.topology.corners(), corner.position), boundaryVector2, boundaryNormal2);
             
                         corner.pressure = (stress0.pressure + stress1.pressure + stress2.pressure) / 3;
                         corner.shear = (stress0.shear + stress1.shear + stress2.shear) / 3;
@@ -406,13 +337,12 @@ export class PlanetWorker {
 
             for (let i = 0; i < stressBlurIterations; i++) {
                 for (let j = 0; j < boundaryCorners.length; j++) {
-                    const corner = this.topology.corners[boundaryCorners[j]];
+                    const corner = this.topology.corners()[boundaryCorners[j]];
 
                     let averagePressure = 0;
                     let averageShear = 0;
                     let neighborCount = 0;
-                    for (let k = 0; k < corner.corners.length; k++) {
-                        const neighbor = this.topology.corners[corner.corners[k]];
+                    for (const neighbor of this.topology.corners(corner)) {
                         if (neighbor.betweenPlates) {
                             averagePressure += neighbor.pressure;
                             averageShear += neighbor.shear;
@@ -425,7 +355,7 @@ export class PlanetWorker {
                 }
         
                 for (let j = 0; j < boundaryCorners.length; j++) {
-                    const corner = this.topology.corners[boundaryCorners[j]];
+                    const corner = this.topology.corners()[boundaryCorners[j]];
                     if (corner.betweenPlates) {
                         corner.pressure = newCornerPressure[j];
                         corner.shear = newCornerShear[j];
@@ -440,14 +370,14 @@ export class PlanetWorker {
 
         if (this.topology) {
             for (let i = 0; i < boundaryCorners.length; i++) {
-                const corner = this.topology.corners[boundaryCorners[i]];
+                const corner = this.topology.corners()[boundaryCorners[i]];
         
                 const innerBorderIndex = boundaryCornerInnerBorderIndexes[i];
                 if (innerBorderIndex) {
-                    const innerBorder = this.topology.borders[corner.borders[innerBorderIndex]];
-                    const outerBorder0 = this.topology.borders[corner.borders[(innerBorderIndex + 1) % corner.borders.length]];
-                    const plateIndex0 = this.topology.tiles[innerBorder.tiles[0]].plate;
-                    const plateIndex1 = this.topology.tiles[outerBorder0.tiles[0]].plate !== plateIndex0 ? this.topology.tiles[outerBorder0.tiles[0]].plate : this.topology.tiles[outerBorder0.tiles[1]].plate;
+                    const innerBorder = this.topology.borders(corner)[innerBorderIndex];
+                    const outerBorder0 = this.topology.borders(corner)[(innerBorderIndex + 1) % this.topology.borders(corner).length];
+                    const plateIndex0 = this.topology.tiles(innerBorder)[0].plate;
+                    const plateIndex1 = this.topology.tiles(outerBorder0)[0].plate !== plateIndex0 ? this.topology.tiles(outerBorder0)[0].plate : this.topology.tiles(outerBorder0)[1].plate;
         
                     let calculateElevation: (distanceToPlateBoundary: number, distanceToPlateRoot: number, boundaryElevation: number, plateElevation: number, pressure: number, shear: number) => number;
         
@@ -474,7 +404,7 @@ export class PlanetWorker {
                             calculateElevation = this.calculateDormantElevation;
                         }
         
-                        const nextCorner = this.topology.corners[innerBorder.oppositeCorner(boundaryCorners[i])];
+                        const nextCorner = this.topology.opposite(corner, innerBorder);
                         if (!nextCorner.betweenPlates) {
                             elevationBorderQueue.push({
                                 origin: {
@@ -487,14 +417,14 @@ export class PlanetWorker {
                                 border: innerBorder,
                                 corner: corner,
                                 nextCorner: nextCorner,
-                                distanceToPlateBoundary: innerBorder.length(this.topology.corners),
+                                distanceToPlateBoundary: this.topology.corners(innerBorder)[0].position.distanceTo(this.topology.corners(innerBorder)[1].position),
                             });
                         }
                     }
                 } else {
-                    const plateIndex0 = this.topology.tiles[corner.tiles[0]].plate;
-                    const plateIndex1 = this.topology.tiles[corner.tiles[1]].plate;
-                    const plateIndex2 = this.topology.tiles[corner.tiles[2]].plate;
+                    const plateIndex0 = this.topology.tiles(corner)[0].plate;
+                    const plateIndex1 = this.topology.tiles(corner)[1].plate;
+                    const plateIndex2 = this.topology.tiles(corner)[2].plate;
         
                     //corner.elevation = 0;
     
@@ -597,11 +527,14 @@ export class PlanetWorker {
                             front.origin.pressure,
                             front.origin.shear);
             
-                        for (let j = 0; j < corner.borders.length; j++) {
-                            const border = this.topology.borders[corner.borders[j]];
+                        for (let j = 0; j < this.topology.borders(corner).length; j++) {
+                            const border = this.topology.borders(corner)[j];
                             if (!border.betweenPlates) {
-                                const nextCorner = this.topology.corners[corner.corners[j]];
-                                const distanceToPlateBoundary = corner.distanceToPlateBoundary + border.length(this.topology.corners);
+                                const corners = this.topology.corners(corner);
+
+                                const nextCorner = corners[j];
+                                const distanceToPlateBoundary = corner.distanceToPlateBoundary + (corners[0].position.distanceTo(corners[1].position));
+
                                 if (!nextCorner.distanceToPlateBoundary || nextCorner.distanceToPlateBoundary > distanceToPlateBoundary) {
                                     queue.push({
                                         origin: front.origin,
@@ -624,50 +557,48 @@ export class PlanetWorker {
     
     private calculateTileAverageElevations() {
         if (this.topology) {
-            for (let i = 0; i < this.topology.tiles.length; i++) {
-                const tile = this.topology.tiles[i];
+            for (let i = 0; i < this.topology.tiles().length; i++) {
+                const tile = this.topology.tiles()[i];
+                const corners = this.topology.corners(tile);
+
                 let elevation = 0;
-                for (let j = 0; j < tile.corners.length; j++) {
-                    elevation += this.topology.corners[tile.corners[j]].elevation;
+                for (const corner of corners) {
+                    elevation += corner.elevation;
                 }
-                tile.elevation = elevation / tile.corners.length;
+                tile.elevation = elevation / corners.length;
             }
         }
     }
     
     private generatePlanetWeather(heatLevel: number, moistureLevel: number) {
         if (this.topology) {
-            let remainingHeat = 0;
-            let consumedHeat = 1;
-            let remainingMoisture = 0;
             
             const whorls: Whorl[] = this.generateAirCurrentWhorls();
             this.calculateAirCurrents(whorls);
             
-            const airHeatResult = this.initializeAirHeat(heatLevel);
-            if (airHeatResult) {
-                remainingHeat = airHeatResult.airHeat;
-        
-                while (remainingHeat > 0 && consumedHeat >= 0.0001) {
-                    consumedHeat = this.processAirHeat(airHeatResult.corners);
-                    remainingHeat -= consumedHeat;
-                }
-            }
+            const oceanicWhorls: Whorl[] = this.generateOceanicCurrentWhorls();
+            this.calculateOceanicCurrents(oceanicWhorls);
             
+            this.initializeHeat(heatLevel);
+            this.processHeat();
             this.calculateTemperature();
 
-            let consumedMoisture = 1;
-            const airMoistureResult = this.initializeAirMoisture(moistureLevel);
-            if (airMoistureResult) {
-                remainingMoisture = airMoistureResult.airMoisture;
-        
-                while (remainingMoisture > 0 && consumedMoisture >= 0.0001) {
-                    consumedMoisture = this.processAirMoisture(airMoistureResult.corners);
-                    remainingMoisture -= consumedMoisture;
-                }
-            }
-    
-            this.calculateMoisture();
+            this.initializeAirMoisture(moistureLevel);
+            this.processAirMoisture();
+            this.calculateHumidity();
+
+            //let availableMoisture = this.initializeAirMoisture(moistureLevel);
+            //this.processAirMoisture();
+            // while (availableMoisture) {
+            //     this.processAirMoisture();
+
+            //     if (this.topology.corners().filter(c => c.moisture && c.moisture.precipitation < c.moisture.limit).length === 0) {
+            //         break;
+            //     }
+
+            //     availableMoisture = this.topology.corners().map(c => c.moisture?.air || 0).reduce((a, b) => a + b) || 0;
+            // }
+            //this.calculateHumidity();
         }
     }
     
@@ -717,9 +648,71 @@ export class PlanetWorker {
         return whorls;
     }
     
+    private generateOceanicCurrentWhorls() {
+        const whorls: Whorl[] = [];
+        //const direction = this.random.integer(0, 1) ? 1 : -1;
+        //const layerCount = this.random.integer(4, 7);
+        //const circumference = Math.PI * 2 * this.radius;
+        //const fullRevolution = Math.PI * 2;
+        //const baseWhorlRadius = circumference / (2 * (layerCount - 1));
+
+        const oceanicAreas: Vector3[] = [];
+        if (this.topology) {
+            const topology = this.topology;
+
+            for (const plate of this.plates.filter(p => p.oceanic)) {
+                // const center: Vector3 = new Vector3();
+                // for (const tile of plate.tiles.map(t => topology.tiles()[t])) {
+                //     center.add(tile.position);
+                // }
+
+                // center.divideScalar(plate.tiles.length);
+                
+                const center: Vector3 = topology.corners()[plate.root].position.clone();
+                const radius = Math.sqrt(plate.area) * .5;
+
+                whorls.push({
+                    center: center,
+                    strength: .1, //fullRevolution / 12 * direction,
+                    radius: radius / 10
+                });
+                oceanicAreas.push(center);
+            }
+        }
+    
+        // whorls.push({
+        //     center: this.random.value(oceanicAreas) || new Vector3(),
+        //     strength: this.random.realInclusive(fullRevolution / 36, fullRevolution / 24) * direction,
+        //     radius: this.random.realInclusive(baseWhorlRadius * 0.8, baseWhorlRadius * 1.2)
+        // });
+    
+        // for (let i = 1; i < layerCount - 1; i++) {
+        //     direction = -direction;
+        //     const baseTilt = i / (layerCount - 1) * fullRevolution / 2;
+        //     const layerWhorlCount = Math.ceil((Math.sin(baseTilt) * this.radius * fullRevolution) / baseWhorlRadius);
+        //     for (let j = 0; j < layerWhorlCount; j++) {
+        //         whorls.push({
+        //             center: this.random.value(oceanicAreas) || new Vector3(),
+        //             strength: this.random.realInclusive(fullRevolution / 48, fullRevolution / 32) * direction,
+        //             radius: this.random.realInclusive(baseWhorlRadius * 0.8, baseWhorlRadius * 1.2)
+        //         });
+        //     }
+        // }
+    
+        // direction = -direction;
+        // whorls.push({
+        //     center: this.random.value(oceanicAreas) || new Vector3(),
+        //     strength: this.random.realInclusive(fullRevolution / 36, fullRevolution / 24) * direction,
+        //     radius: this.random.realInclusive(baseWhorlRadius * 0.8, baseWhorlRadius * 1.2)
+        // });
+
+        return whorls;
+    }
+    
     calculateAirCurrents(whorls: Whorl[]) {
         if (this.topology) {
-            for(const corner of this.topology.corners) {
+            const corners = this.topology.corners();
+            for(const corner of corners) {
                 const airCurrent = new Vector3(0, 0, 0);
 
                 let weight = 0;
@@ -742,20 +735,26 @@ export class PlanetWorker {
                 airCurrent.divideScalar(weight);
                 corner.air.direction = airCurrent.clone().normalize();
                 corner.air.speed = airCurrent.length(); //kilometers per hour
-        
-                corner.air.outflow = new Array(corner.borders.length);
+                corner.air.outflow = [];
+
+                if (isNaN(corner.air.speed)) {
+                    corner.air.speed = 0;
+                }
+
+                const cornerCorners = this.topology.corners(corner);
 
                 let outflowSum = 0;
-                for (let j = 0; j < corner.corners.length; j++) {
-                    const vector = corner.vectorTo(this.topology.corners[corner.corners[j]]).normalize();
+                for (let j = 0; j < cornerCorners.length; j++) {
+                    const adjacent = cornerCorners[j];
+                    const vector = corner.vectorTo(adjacent).normalize();
                     const dot = vector.dot(corner.air.direction);
 
-                    corner.air.outflow[j] = dot > 0 ? dot : 0;
+                    corner.air.outflow.push(dot > 0 ? dot : 0);
                     outflowSum += corner.air.outflow[j];
                 }
         
                 if (outflowSum > 0) {
-                    for (let j = 0; j < corner.borders.length; j++) {
+                    for (let j = 0; j < corner.air.outflow.length; j++) {
                         corner.air.outflow[j] /= outflowSum;
                     }
                 }
@@ -763,18 +762,137 @@ export class PlanetWorker {
         }
     }
     
-    initializeAirHeat(heatLevel: number) {
-        const corners = this.topology?.corners;
-        if (corners) {
-            const activeCorners: number[] = [];
+    calculateOceanicCurrents(whorls: Whorl[]) {
+        if (this.topology) {
+            const topology = this.topology;
 
-            let airHeat = 0;
+            for (const plate of this.plates.filter(p => p.oceanic && p.boundaryCorners.length > 0)) {
+                const tiles = plate.tiles.map(t => topology.tiles()[t]);
+                let corners = tiles.map(t => topology.corners(t)).reduce((a, b) => [...a, ...b]);
+                corners = corners.filter((v, i) => corners.indexOf(v) === i && v.elevation <= 0);
+
+                // const center: Vector3 = new Vector3();
+                // for (const tile of plate.tiles.map(t => topology.tiles()[t])) {
+                //     center.add(tile.position);
+                // }
+
+                // center.divideScalar(plate.tiles.length);
+                
+                const center: Vector3 = topology.corners()[plate.root].position.clone();
+                const radius = plate.boundaryCorners.map(c => center.distanceTo(topology.corners()[c].position))
+                    .reduce((a, b) => a + b) / plate.boundaryCorners.length;
+                //const surfaceArea = Math.PI * 4 * Math.pow(this.radius, 2);
+                const fullRevolution = Math.PI * 2;
+                const circumference = fullRevolution * radius;
+
+                const whorl: Whorl = {
+                    center: center,
+                    strength: (radius / circumference) * .2,
+                    radius: 0
+                };
+
+                const boundaries = plate.boundaryBorders.map(b => topology.borders()[b])
+                    .map(b => {
+                        const e0 = topology.corners(b)[0];
+                        const e1 = topology.corners(b)[1];
+
+                        if (e0.elevation > 0 && e1.elevation > 0) {
+                            return e0.position.clone().add(e1.position.clone().sub(e0.position).divideScalar(2));
+                        } else if (e0.elevation > 0) {
+                            return e0.position;
+                        } else if (e1.elevation > 0) {
+                            return e1.position;
+                        }
+
+                        return undefined;
+                    })
+                    .filter(b => b).map(b => b as Vector3);
+                
+                for (const corner of corners) {
+                    const oceanicCurrent = new Vector3(0, 0, 0);
+
+                    const boundary = boundaries
+                        .sort((a, b) => corner.position.distanceTo(a) - corner.position.distanceTo(b))[0];
+
+                    if (boundary) {
+                        const maxDistance = whorl.center.distanceTo(boundary);
+                        const boundaryDistance = boundary.distanceTo(corner.position) / maxDistance;
+                        const centerDistance = whorl.center.distanceTo(corner.position) / maxDistance;
+
+                        let whorlCurrent = boundary.clone().cross(corner.position).multiplyScalar(-1);
+                        whorlCurrent.multiplyScalar((1 - boundaryDistance) * .1);
+                        oceanicCurrent.add(whorlCurrent);
+                
+                        whorlCurrent = whorl.center.clone().cross(corner.position);
+                        whorlCurrent.multiplyScalar(1 - centerDistance);
+                        oceanicCurrent.add(whorlCurrent);
+    
+                        oceanicCurrent.normalize();
+    
+                        const angle = whorl.center.angleTo(corner.position);
+                        const distance = angle * this.radius;
+                        const normalizedDistance = distance / maxDistance;
+                        const whorlStrength = this.radius * whorl.strength * normalizedDistance;
+    
+                        oceanicCurrent.multiplyScalar(whorlStrength);
+                    }
+
+                    corner.water.direction = oceanicCurrent.clone().normalize();
+                    corner.water.speed = oceanicCurrent.length(); //kilometers per hour
+                    corner.water.outflow = [];
+                }
+
+                
+                for (const corner of corners) {
+                    const adjacent = topology.corners(corner).filter(c => c.elevation <= 0);
+                    for (const adj of adjacent) {
+                        corner.water.direction.add(adj.water.direction);
+                        corner.water.speed += adj.water.speed;
+                    }
+
+                    corner.water.direction.divideScalar(adjacent.length + 1);
+                    corner.water.speed /= adjacent.length + 1;
+                }
+
+                for (const corner of corners) {
+                    let outflowSum = 0;
+                    for (let j = 0; j < this.topology.corners(corner).length; j++) {
+                        const adjacent = this.topology.corners(corner)[j];
+                        if (adjacent.elevation <= 0) {
+                            const vector = corner.vectorTo(adjacent).normalize();
+                            const dot = vector.dot(corner.water.direction);
+        
+                            corner.water.outflow.push(dot > 0 ? dot : 0);
+                            outflowSum += corner.water.outflow[j];
+                        } else {
+                            corner.water.outflow.push(0);
+                        }
+                    }
+            
+                    if (outflowSum > 0) {
+                        for (let j = 0; j < corner.water.outflow.length; j++) {
+                            corner.water.outflow[j] /= outflowSum;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    initializeHeat(heatLevel: number) {
+        if (this.topology) {
+            const corners = this.topology.corners();
+
             for (let c = 0; c < corners.length; c++) {
                 const corner = corners[c];
 
+                const absorptionAir = corner.air.speed > 0 ? 0.1 * corner.area / corner.air.speed : 0;
+                const absorptionWater = corner.water.speed > 0 ? 0.1 * corner.area / corner.water.speed : 0;
+                const rate = (absorptionAir + absorptionWater);
+
                 corner.heat = {
                     current: 0,
-                    absorption: 0.1 * corner.area / Math.max(0.1, Math.min(corner.air.speed, 1)),
+                    absorption: rate * .01,
                     limit: corner.area,
                     air: corner.area * heatLevel,
                     airInflow: 0
@@ -783,209 +901,204 @@ export class PlanetWorker {
                 if (corner.elevation > 0) {
                     corner.heat.absorption *= 2;
                 }
-        
-                activeCorners.push(c);
-                airHeat += corner.heat.air;
             }
-    
-            const result: AirHeatResult = {
-                corners: activeCorners,
-                airHeat: airHeat
-            };
-            
-            return result;
         }
 
-        return undefined;
+        return this.topology?.corners().map(c => c.heat?.air || 0).reduce((a, b) => a + b) || 0;
     }
     
-    processAirHeat(corners: number[]) {
-        const activeCorners: number[] = [];
+    processHeat() {
+        const activeCorners: Corner[] = [];
 
-        let consumedHeat = 0;
         if (this.topology) {
-            for (const c of corners) {
-                const corner = this.topology.corners[c];
-
+            const corners = this.topology.corners();
+            for (const corner of corners.filter(c => c.heat?.air)) {
                 if (corner.heat) {
-                    let change = Math.max(0, Math.min(corner.heat.air, corner.heat.absorption * (1 - corner.heat.current / corner.heat.limit)));
+                    const absorption = corner.heat.absorption * (1 + (1 - Math.max(0, Math.max(corner.humidity, 1))) * 0.1);
+                    let change = Math.max(0, Math.min(corner.heat.air, absorption * (1 - corner.heat.current / corner.heat.limit)));
                     corner.heat.current += change;
-                    consumedHeat += change;
 
                     const heatLoss = corner.area * (corner.heat.current / corner.heat.limit) * 0.002;
                     change = Math.min(corner.heat.air, change + heatLoss);
             
-                    const remainingCornerAirHeat = corner.heat.air - change;
-                    corner.heat.air = 0;
+                    corner.heat.air -= change;
             
-                    if (corner.air.outflow) {
-                        for (let j = 0; j < corner.corners.length; j++) {
-                            const adjacent = this.topology.corners[corner.corners[j]];
-                            const outflow = corner.air.outflow[j];
-                            
-                            if (adjacent.heat && outflow > 0) {
-                                adjacent.heat.airInflow += remainingCornerAirHeat * outflow;
-                                activeCorners.push(corner.corners[j]);
-                            }
+                    const cornerCorners = this.topology.corners(corner);
+                    for (let j = 0; j < cornerCorners.length; j++) {
+                        const adjacent = cornerCorners[j];
+                        let outflow = corner.air.outflow[j];
+                        if (corner.water?.speed) {
+                            outflow += corner.water.outflow[j];
+                        }
+                        
+                        if (adjacent.heat && outflow > 0) {
+                            adjacent.heat.airInflow += corner.heat.air * outflow;
+                            activeCorners.push(corner);
                         }
                     }
                 }
             }
         
-            for (const c of activeCorners) {
-                const corner = this.topology.corners[c];
+            for (const corner of activeCorners) {
                 if (corner.heat) {
                     corner.heat.air = corner.heat.airInflow;
                     corner.heat.airInflow = 0;
                 }
             }
         }
-    
-        return consumedHeat;
     }
     
     calculateTemperature() {
         if (this.topology) {
-            for (let i = 0; i < this.topology.corners.length; i++) {
-                const corner = this.topology.corners[i];
+            const corners = this.topology.corners();
+            for (let i = 0; i < corners.length; i++) {
+                const corner = corners[i];
 
                 if (corner.heat) {
                     const latitudeEffect = Math.sqrt(1 - Math.abs(corner.position.y) / this.radius);
                     const elevationEffect = 1 - Math.pow(Math.max(0, Math.min(corner.elevation * 0.8, 1)), 2);
                     const normalizedHeat = corner.heat.current / corner.area;
 
-                    corner.temperature = (latitudeEffect * elevationEffect * 0.7 + normalizedHeat * 0.3) * 5 / 3 - 2 / 3;
+                    corner.temperature = (latitudeEffect * (elevationEffect * 0.7) + (normalizedHeat * 0.3)) * 5 / 3 - 2 / 3;
+                    corner.temperature *= 2;
                 }
-
-                //corner.heat = undefined;
             }
         
-            for (let i = 0; i < this.topology.tiles.length; i++) {
-                const tile = this.topology.tiles[i];
+            const tiles = this.topology.tiles();
+            for (let i = 0; i < tiles.length; i++) {
+                const tile = tiles[i];
 
+                const tileCorners = this.topology.corners(tile);
                 tile.temperature = 0;
-                for (const c of tile.corners) {
-                    tile.temperature += this.topology.corners[c].temperature;
+                for (const c of tileCorners) {
+                    tile.temperature += c.temperature;
                 }
-                tile.temperature /= tile.corners.length;
+                tile.temperature /= tileCorners.length;
             }
         }
+
+        return this.topology?.tiles().map(t => t.temperature);
     }
     
     initializeAirMoisture(moistureLevel: number) {
-        const corners = this.topology?.corners;
+        if (this.topology) {
+            const corners = this.topology.corners();
+            for (const corner of corners) {
+                // const diameter = Math.sqrt(corner.area);
+                // const volume = Math.pow(diameter, 3);
 
-        if (corners) {
-            const activeCorners: number[] = [];
-
-            let airMoisture = 0;
-            for (let i = 0; i < corners.length; i++) {
-                const corner = corners[i];
+                const absorptionAir = corner.air.speed > 0 ? 0.1 * corner.area / corner.air.speed : 0;
+                const absorptionWater = corner.water.speed > 0 ? 0.1 * corner.area / corner.water.speed : 0;
+                const rate = (absorptionAir + absorptionWater);
 
                 corner.moisture = {
-                    air: (corner.elevation > 0) ? 0 : corner.area * moistureLevel * Math.max(0, Math.min(0.5 + corner.temperature * 0.5, 1)),
+                    air: 0,
                     airInflow: 0,
+                    airOutflow: 0,
                     precipitation: 0,
-                    rate: (0.0075 * corner.area / Math.max(0.1, Math.min(corner.air.speed, 1))) * (1 + (1 - Math.max(0, Math.max(corner.temperature, 1))) * 0.1),
-                    limit: corner.area * 0.25
+                    rate: rate * .01,
+                    limit: corner.area * .25
                 };
-
+                
                 if (corner.elevation > 0) {
-                    corner.moisture.rate *= 1 + corner.elevation * 0.5;
-                    corner.moisture.limit = corner.area * (0.25 + Math.max(0, Math.min(corner.elevation, 1)) * 0.25);
+                    corner.moisture.rate *= (1 + corner.elevation * 0.5);
+                    corner.moisture.limit *= 1 + Math.max(0, Math.min(corner.elevation, 1)) * 0.25;
+                } else {
+                    corner.moisture.air = corner.area * moistureLevel * Math.max(0, Math.min(0.5 + corner.temperature * 0.5, 1));
+                    //corner.moisture.precipitation = corner.moisture.limit;
                 }
-        
-                activeCorners.push(i);
-                airMoisture += corner.moisture.air;
             }
-    
-            const result: AirMoistureResult = {
-                corners: activeCorners,
-                airMoisture: airMoisture
-            };
-    
-            return result;
         }
 
-        return undefined;
+        return this.topology?.corners().map(c => c.moisture?.air || 0).reduce((a, b) => a + b) || 0;
     }
     
-    processAirMoisture(corners: number[]) {
-        const activeCorners: number[] = [];
-
-        let consumedMoisture = 0;
+    processAirMoisture() {
         if (this.topology) {
-            for (const c of corners) {
-                const corner = this.topology.corners[c];
+            const corners = this.topology.corners();
+            for (const corner of corners.filter(c => c.moisture?.air)) {
 
                 if (corner.moisture) {
-                    let moistureChange = Math.max(0, Math.min(corner.moisture.air, corner.moisture.rate * (1 - corner.moisture.precipitation / corner.moisture.limit)));
-                    corner.moisture.precipitation += moistureChange;
-                    consumedMoisture += moistureChange;
 
+                    const rate = corner.moisture.rate * (1 + (1 - Math.max(0, Math.max(corner.temperature, 1))) * 0.1);
+                    let moistureChange = Math.max(0, Math.min(corner.moisture.air, rate * (1 - corner.moisture.precipitation / corner.moisture.limit)));
+                    
                     const moistureLoss = corner.area * (corner.moisture.precipitation / corner.moisture.limit) * 0.02;
                     moistureChange = Math.min(corner.moisture.air, moistureChange + moistureLoss);
             
-                    const remainingCornerAirMoisture = corner.moisture.air - moistureChange;
-                    corner.moisture.air = 0;
+                    corner.moisture.precipitation += moistureChange;
+                    corner.moisture.air -= moistureChange;
             
-                    for (let j = 0; j < corner.corners.length; j++) {
-                        const adjacent = this.topology.corners[corner.corners[j]];
+                    const cornerCorners = this.topology.corners(corner);
+                    for (let j = 0; j < cornerCorners.length; j++) {
+                        const adjacent = cornerCorners[j];
                         const outflow = corner.air.outflow[j];
+                        // if (corner.water) {
+                        //     outflow += corner.water.outflow[j];
+                        // }
 
                         if (adjacent.moisture && outflow > 0) {
-                            adjacent.moisture.airInflow += remainingCornerAirMoisture * outflow;
-                            activeCorners.push(corner.corners[j]);
+                            adjacent.moisture.airInflow += corner.moisture.air * outflow;
+                            //corner.moisture.airOutflow += corner.moisture.air * outflow;
                         }
                     }
+
+                    corner.moisture.air = 0;
                 }
             }
         
-            for (const c of activeCorners) {
-                const corner = this.topology.corners[c];
-
+            for (const corner of corners.filter(c => c.moisture?.airInflow)) {
                 if (corner.moisture) {
-                    corner.moisture.air = corner.moisture.airInflow;
+                    corner.moisture.air += corner.moisture.airInflow;
                     corner.moisture.airInflow = 0;
+                    
+                    // corner.moisture.air -= corner.moisture.airOutflow;
+                    // corner.moisture.airOutflow = 0;
                 }
             }
         }
-    
-        return consumedMoisture;
     }
     
-    calculateMoisture() {
+    calculateHumidity() {
         if (this.topology) {
-            for (const corner of this.topology.corners) {
+            const corners = this.topology.corners();
+            for (const corner of corners) {
+                // const diameter = Math.sqrt(corner.area);
+                // const volume = Math.pow(diameter, 3);
+
                 if (corner.moisture) {
-                    corner.humidity = corner.moisture.precipitation / corner.area / 0.5;
+                    corner.humidity = corner.moisture.precipitation / corner.area;
+                    corner.humidity *= 2;
                 }
                 
                 //corner.moisture = undefined;
             }
         
-            for (let i = 0; i < this.topology.tiles.length; i++) {
-                const tile = this.topology.tiles[i];
-                tile.moisture = 0;
+            const tiles = this.topology.tiles();
+            for (let i = 0; i < tiles.length; i++) {
+                const tile = tiles[i];
+                tile.humidity = 0;
 
-                for (const c of tile.corners) {
-                    const corner = this.topology.corners[c];
-                    tile.moisture += corner.humidity;
+                const tileCorners = this.topology.corners(tile);
+                for (const corner of tileCorners) {
+                    tile.humidity += corner.humidity;
                 }
 
-                tile.moisture /= tile.corners.length;
+                tile.humidity /= tileCorners.length;
             }
         }
+
+        return this.topology?.tiles().map(t => t.humidity);
     }
     
     generatePlanetBiomes() {
-        const tiles = this.topology?.tiles;
+        const tiles = this.topology?.tiles();
         if (tiles) {
             for (let i = 0; i < tiles.length; i++) {
                 const tile = tiles[i];
                 const elevation = Math.max(0, tile.elevation);
                 const temperature = tile.temperature;
-                const moisture = tile.moisture;
+                const moisture = tile.humidity;
         
                 if (elevation <= 0) {
                     if (temperature > 0) {
@@ -994,38 +1107,46 @@ export class PlanetWorker {
                         tile.biome = 'oceanGlacier';
                     }
                 } else if (elevation < 0.6) {
-                    if (temperature > 0.4) {
-                        if (moisture < 0.25) {
+                    if (temperature > 0.75) {
+                        if (moisture < 0.51) {
                             tile.biome = 'desert';
                         } else {
                             tile.biome = 'rainForest';
                         }
-                    } else if (temperature > 0.3) {
-                        if (moisture < 0.25) {
+                    } else if (temperature > 0.6) {
+                        if (moisture < 0.51) {
                             tile.biome = 'rocky';
-                        } else if (moisture < 0.50) {
+                        } else if (moisture < 0.6) {
                             tile.biome = 'plains';
                         } else {
                             tile.biome = 'swamp';
                         }
-                    } else if (temperature > 0) {
-                        if (moisture < 0.25) {
+                    } else if (temperature > 0.3) {
+                        if (moisture < 0.51) {
                             tile.biome = 'plains';
-                        } else if (moisture < 0.50) {
+                        } else if (moisture < 0.60) {
                             tile.biome = 'grassland';
                         } else {
                             tile.biome = 'deciduousForest';
                         }
+                    } else if (temperature > 0.2) {
+                        if (moisture < 0.51) {
+                            tile.biome = 'plains';
+                        } else if (moisture < 0.60) {
+                            tile.biome = 'grassland';
+                        } else {
+                            tile.biome = 'coniferForest';
+                        }
                     } else {
-                        if (moisture < 0.25) {
+                        if (moisture < 0.51) {
                             tile.biome = 'tundra';
                         } else {
                             tile.biome = 'landGlacier';
                         }
                     }
                 } else if (elevation < 0.8) {
-                    if (temperature > 0) {
-                        if (moisture < 0.25) {
+                    if (temperature > 0.2) {
+                        if (moisture < 0.51) {
                             tile.biome = 'tundra';
                         } else {
                             tile.biome = 'coniferForest';
@@ -1034,7 +1155,7 @@ export class PlanetWorker {
                         tile.biome = 'tundra';
                     }
                 } else {
-                    if (temperature > 0 || moisture < 0.25) {
+                    if (temperature > 0 || moisture < 0.51) {
                         tile.biome = 'mountain';
                     } else {
                         tile.biome = 'snowyMountain';
@@ -1042,7 +1163,12 @@ export class PlanetWorker {
                 }
             }
         }
+
+        return this.topology?.tiles().map(t => t.biome);
     }
 }
 
-expose(new PlanetWorker());
+const obj = new PlanetWorker();
+(globalThis as any).planet = obj;
+
+expose(obj);

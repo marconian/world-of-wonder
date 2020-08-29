@@ -7,7 +7,7 @@ import { Color, Vector3, Geometry, MeshLambertMaterial, Mesh, Face3, MeshBasicMa
 import { MeshDescription } from './MeshDescription';
 import XorShift128 from '../utils/XorShift128';
 import { PlanetWorker } from '../workers/PlanetWorker';
-import { wrap, releaseProxy } from 'comlink';
+import { wrap, releaseProxy, Remote } from 'comlink';
 import Tile from './Tile';
 
 export type PlanetMode = 'terrain' | 'plates' | 'elevation' | 'temperature' | 'moisture';
@@ -25,39 +25,50 @@ export class Planet {
     private _plateBoundaries = true;
     private _plateMovements = true;
     private _airCurrents = true;
+    private _oceanicCurrents = true;
     private _mesh: MeshDescription;
     private _random: XorShift128;
+    private _worker?: Worker;
+    private _tools?: Remote<PlanetWorker>;
 
     constructor(seed: number, mesh: MeshDescription) {
         this.seed = seed;
         this.plates = [];
         this._random = new XorShift128(seed, seed, seed, seed);
-        this.radius = this._random.integer(500, 2000);
+        this.radius = this._random.integer(500, 1500);
         this._mesh = mesh;
     }
 
     async build(plateCount: number, oceanicRate: number, heatLevel: number, moistureLevel: number) {
-        const planetWorker = new Worker('../workers/PlanetWorker', { type: 'module' });
-        const planetTools = wrap<PlanetWorker>(planetWorker);
+        this._worker = new Worker('../workers/PlanetWorker', { type: 'module' });
+        this._tools = wrap<PlanetWorker>(this._worker);
 
-        await planetTools.init(this._mesh, this.radius, this.seed);
-        await planetTools.generateTopology();
-        await planetTools.generateTerrain(plateCount, oceanicRate, heatLevel, moistureLevel);
+        await this._tools.init(this._mesh, this.radius, this.seed);
+        await this._tools.generateTopology();
+        await this._tools.generateTerrain(plateCount, oceanicRate, heatLevel, moistureLevel);
 
-        this.topology = await planetTools.topology;
+        this.topology = await this._tools.topology;
         if (this.topology) await Topology.revive(this.topology);
 
-        this.plates = await planetTools.plates;
+        this.plates = await this._tools.plates;
         if (this.plates) await Plate.revive(this.plates);
-
-        planetTools[releaseProxy]();
-        planetWorker.terminate();
 
         this.renderData = this.generatePlanetRenderData();
         //this.statistics = this.generatePlanetStatistics();
+
+        (window as any).planet = this;
+        (window as any).topology = this.topology;
+        (window as any).plates = this.plates;
     }
 
     dispose() {
+        if (this._tools) {
+            this._tools[releaseProxy]();
+        }
+        if (this._worker) {
+            this._worker.terminate();
+        }
+        
         this.topology?.dispose();
         this.renderData = undefined;
         this.statistics = undefined;
@@ -152,73 +163,201 @@ export class Planet {
         }
     }
     
+    toggleOceanicCurrents(show?: boolean) {
+        if (typeof show === 'boolean') {
+            this._oceanicCurrents = show;
+        } else {
+            this._oceanicCurrents = !this._oceanicCurrents;
+        }
+    
+        if (this?.renderData?.surface && this?.renderData.oceanicCurrents) {
+            if (this._oceanicCurrents) {
+                this.renderData.surface.renderObject.add(this.renderData.oceanicCurrents.renderObject);
+            } else {
+                this.renderData.surface.renderObject.remove(this.renderData.oceanicCurrents.renderObject);
+            }
+        }
+    }
+    
     generatePlanetRenderData() {
-        const renderData: RenderData = {};
-        renderData.surface = this.buildSurfaceRenderObject();
-        renderData.plateBoundaries = this.buildPlateBoundariesRenderObject();
-        renderData.plateMovements = this.buildPlateMovementsRenderObject();
-        renderData.airCurrents = this.buildAirCurrentsRenderObject();
+        const renderData: RenderData = {
+            surface: this.buildSurfaceRenderObject(),
+            plateBoundaries: this.buildPlateBoundariesRenderObject(),
+            plateMovements: this.buildPlateMovementsRenderObject(),
+            airCurrents: this.buildAirCurrentsRenderObject(),
+            oceanicCurrents: this.buildOceanicCurrentsRenderObject()
+        };
     
         return renderData;
     }
 
-    getTerrainColor(tile: Tile) {
-        const colorDeviance = new Color(this._random.unit(), this._random.unit(), this._random.unit());
-        let terrainColor;
-        if (tile.elevation <= 0) {
-            if (tile.biome === 'ocean') terrainColor = new Color(0x0066FF).lerp(new Color(0x0044BB), Math.min(-tile.elevation, 1)).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'oceanGlacier') terrainColor = new Color(0xDDEEFF).lerp(colorDeviance, 0.10);
-            else terrainColor = new Color(0xFF00FF);
-        } else if (tile.elevation < 0.6) {
-            const normalizedElevation = tile.elevation / 0.6;
-            if (tile.biome === 'desert') terrainColor = new Color(0xDDDD77).lerp(new Color(0xBBBB55), normalizedElevation).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'rainForest') terrainColor = new Color(0x44DD00).lerp(new Color(0x229900), normalizedElevation).lerp(colorDeviance, 0.20);
-            else if (tile.biome === 'rocky') terrainColor = new Color(0xAA9977).lerp(new Color(0x887755), normalizedElevation).lerp(colorDeviance, 0.15);
-            else if (tile.biome === 'plains') terrainColor = new Color(0x99BB44).lerp(new Color(0x667722), normalizedElevation).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'grassland') terrainColor = new Color(0x77CC44).lerp(new Color(0x448822), normalizedElevation).lerp(colorDeviance, 0.15);
-            else if (tile.biome === 'swamp') terrainColor = new Color(0x77AA44).lerp(new Color(0x446622), normalizedElevation).lerp(colorDeviance, 0.25);
-            else if (tile.biome === 'deciduousForest') terrainColor = new Color(0x33AA22).lerp(new Color(0x116600), normalizedElevation).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'tundra') terrainColor = new Color(0x9999AA).lerp(new Color(0x777788), normalizedElevation).lerp(colorDeviance, 0.15);
-            else if (tile.biome === 'landGlacier') terrainColor = new Color(0xDDEEFF).lerp(colorDeviance, 0.10);
-            else terrainColor = new Color(0xFF00FF);
-        } else if (tile.elevation < 0.8) {
-            const normalizedElevation = (tile.elevation - 0.6) / 0.2;
-            if (tile.biome === 'tundra') terrainColor = new Color(0x777788).lerp(new Color(0x666677), normalizedElevation).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'coniferForest') terrainColor = new Color(0x338822).lerp(new Color(0x116600), normalizedElevation).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'snow') terrainColor = new Color(0xEEEEEE).lerp(new Color(0xDDDDDD), normalizedElevation).lerp(colorDeviance, 0.10);
-            else if (tile.biome === 'mountain') terrainColor = new Color(0x555544).lerp(new Color(0x444433), normalizedElevation).lerp(colorDeviance, 0.05);
-            else terrainColor = new Color(0xFF00FF);
-        } else {
-            const normalizedElevation = Math.min((tile.elevation - 0.8) / 0.5, 1);
-            if (tile.biome === 'mountain') terrainColor = new Color(0x444433).lerp(new Color(0x333322), normalizedElevation).lerp(colorDeviance, 0.05);
-            else if (tile.biome === 'snowyMountain') terrainColor = new Color(0xDDDDDD).lerp(new Color(0xFFFFFF), normalizedElevation).lerp(colorDeviance, 0.10);
-            else terrainColor = new Color(0xFF00FF);
+    getColor(primary: string | number | Color, secondary?: string | number | Color, offset?: number, alpha?: number) {
+        let color = new Color(primary);
+        if (secondary !== undefined) { color = color.lerp(new Color(secondary), offset !== undefined ? offset : 1); }
+        if (alpha !== undefined) {
+            const deviance = new Color(this._random.unit(), this._random.unit(), this._random.unit());
+            color = color.lerp(deviance, alpha);
         }
 
-        return terrainColor;
+        return color;
+    }
+
+    getBiomeColor(tile: Tile) {
+        let normalizedElevation: number | undefined;
+        if (tile.elevation <= 0) {
+            normalizedElevation = Math.min(-tile.elevation, 1);
+        } else if (tile.elevation < .6) {
+            normalizedElevation = tile.elevation / 0.6;
+        } else if (tile.elevation < .8) {
+            normalizedElevation = (tile.elevation - 0.6) / 0.2;
+        } else {
+            normalizedElevation = Math.min((tile.elevation - 0.8) / 0.5, 1);
+        }
+
+        switch(tile.biome) {
+        case 'ocean':
+            return this.getColor(0x0066FF, 0x0044BB, Math.min(-tile.elevation, 1), 0);//), .1);
+        case 'oceanGlacier':
+            return this.getColor(0xDDEEFF, undefined, undefined, 0);//), .1);
+        case 'landGlacier':
+            return this.getColor(0xDDEEFF, undefined, undefined, 0);//), .1);
+        case 'desert':
+            return this.getColor(0xDDDD77, 0xBBBB55, normalizedElevation, 0);//), .1);
+        case 'rainForest':
+            return this.getColor(0x0B4001, 0x083000, normalizedElevation, 0);//), .1);
+        case 'rocky':
+            return this.getColor(0xAA9977, 0x887755, normalizedElevation, 0);//), .1);
+        case 'plains':
+            return this.getColor(0x77CC44, 0x667722, normalizedElevation, 0);//), .1);
+        case 'grassland':
+            return this.getColor(0x77CC44, 0x448822, normalizedElevation, 0);//), .1);
+        case 'swamp':
+            return this.getColor(0x0B4001, 0x00e7f7, normalizedElevation, 0);//), .1);
+        case 'coniferForest':
+            return this.getColor(0x004a35, 0x002917, normalizedElevation, 0);//), .1);
+        case 'deciduousForest':
+            return this.getColor(0x005426, 0x007516, normalizedElevation, 0);//), .1);
+        case 'tundra':
+            return this.getColor(tile.elevation < .6 ? 0x9999AA : 0x777788, tile.elevation < .6 ? 0x777788 : 0x666677, normalizedElevation, 0);
+        case 'snow':
+            return this.getColor(0xEEEEEE, 0xDDDDDD, normalizedElevation, 0);
+        case 'mountain':
+            return this.getColor(tile.elevation < .8 ? 0x555544 : 0x444433, tile.elevation < .8 ? 0x444433 : 0x333322, normalizedElevation, 0);
+        case 'snowyMountain':
+            return this.getColor(0xDDDDDD, 0xFFFFFF, normalizedElevation, 0);
+        default:
+            return this.getColor(0xFF00FF);
+        }
     }
 
     getElevationColor(tile: Tile) {
-        let elevationColor;
-        if (tile.elevation <= 0) elevationColor = new Color(0x224488).lerp(new Color(0xAADDFF), Math.max(0, Math.min((tile.elevation + 3 / 4) / (3 / 4), 1)));
-        else if (tile.elevation < 0.75) elevationColor = new Color(0x997755).lerp(new Color(0x553311), Math.max(0, Math.min((tile.elevation) / (3 / 4), 1)));
-        else elevationColor = new Color(0x553311).lerp(new Color(0x222222), Math.max(0, Math.min((tile.elevation - 3 / 4) / (1 / 2), 1)));
-
-        return elevationColor;
-
+        if (tile.elevation <= 0) return this.getColor(0x224488, 0xAADDFF, Math.max(0, Math.min((tile.elevation + 3 / 4) / (3 / 4), 1)));
+        else if (tile.elevation < 0.75) return this.getColor(0x997755, 0x553311, Math.max(0, Math.min((tile.elevation) / (3 / 4), 1)));
+        else return this.getColor(0x553311, 0x222222, Math.max(0, Math.min((tile.elevation - 3 / 4) / (1 / 2), 1)));
     }
 
     getTemperatureColor(tile: Tile) {
-        let temperatureColor;
-        if (tile.temperature <= 0) temperatureColor = new Color(0x0000FF).lerp(new Color(0xBBDDFF), Math.max(0, Math.min((tile.temperature + 2 / 3) / (2 / 3), 1)));
-        else temperatureColor = new Color(0xFFFF00).lerp(new Color(0xFF0000), Math.max(0, Math.min((tile.temperature) / (3 / 3), 1)));
-
-        return temperatureColor;
+        if (tile.temperature <= 0) return this.getColor(0x0000FF, 0xBBDDFF, Math.max(0, Math.min((tile.temperature + 2 / 3) / (2 / 3), 1)));
+        else return this.getColor(0xFFFF00, 0xFF0000, Math.max(0, Math.min((tile.temperature) / (3 / 3), 1)));
     }
 
     getMoistureColor(tile: Tile) {
-        const moistureColor = new Color(0xFFCC00).lerp(new Color(0x0066FF), Math.max(0, Math.min(tile.moisture, 1)));
-        return moistureColor;
+        return this.getColor(0xFFCC00, 0x0066FF, Math.max(0, Math.min(tile.humidity, 1)));
+    }
+
+    async update() {
+        if (this.topology && this.renderData?.surface) {
+
+            const terrainColors: Color[][] = [];
+            const temperatureColors: Color[][] = [];
+            const moistureColors: Color[][] = [];
+
+            if (this._tools) {
+                await Promise.all([
+                    this._tools.processHeat(),
+                    this._tools.processAirMoisture()
+                ]);
+                const results = await Promise.all([
+                    this._tools.calculateTemperature(),
+                    this._tools.calculateHumidity()
+                ]);
+
+                const temperature = results[0];
+                const humidity = results[1];
+                const biomes = await this._tools.generatePlanetBiomes();
+
+                if (temperature && humidity && biomes) {
+                    let updateBiomes = false;
+                    let updateTemperature = false;
+                    let updateHumidity = false;
+
+                    for (let i = 0; i < this.topology.tiles().length; i++) {
+                        const tile = this.topology.tiles()[i];
+                        if (tile.biome !== biomes[i]) {
+                            tile.biome = biomes[i];
+                            updateBiomes = true;
+                        }
+                        if (tile.temperature !== temperature[i]) {
+                            tile.temperature = temperature[i];
+                            updateTemperature = true;
+                        }
+                        if (tile.humidity !== humidity[i]) {
+                            tile.humidity = humidity[i];
+                            updateHumidity = true;
+                        }
+                    }
+
+                    if (updateBiomes) {
+                        for (const tile of this.topology.tiles()) {
+                            const terrainColor = this.getBiomeColor(tile);
+                            for (let j = 0; j < this.topology.corners(tile).length; j++) {
+                                this.buildTileWedgeColors(terrainColors, terrainColor, terrainColor.clone().multiplyScalar(0.5));
+                            }
+                            this.renderData.surface.terrainColors = terrainColors;
+                        }
+                    }
+                    if (updateTemperature) {
+                        for (const tile of this.topology.tiles()) {
+                            const temperatureColor = this.getTemperatureColor(tile);
+                            for (let j = 0; j < this.topology.corners(tile).length; j++) {
+                                this.buildTileWedgeColors(temperatureColors, temperatureColor, temperatureColor.clone().multiplyScalar(0.5));
+                            }
+                            this.renderData.surface.temperatureColors = temperatureColors;
+                        }
+                    }
+                    if (updateHumidity) {
+                        for (const tile of this.topology.tiles()) {
+                            const moistureColor = this.getMoistureColor(tile);
+                            for (let j = 0; j < this.topology.corners(tile).length; j++) {
+                                this.buildTileWedgeColors(moistureColors, moistureColor, moistureColor.clone().multiplyScalar(0.5));
+                            }
+                            this.renderData.surface.moistureColors = moistureColors;
+                        }
+                    }
+                }
+            }
+            
+            const faces = this.renderData.surface.geometry.faces;
+            if (this._mode === 'terrain') {
+                for (let i = 0; i < faces.length; i++) {
+                    faces[i].vertexColors = this.renderData.surface.terrainColors[i];
+                }
+        
+                this.renderData.surface.geometry.elementsNeedUpdate = true;
+            } else if (this._mode === 'temperature') {
+                for (let i = 0; i < faces.length; i++) {
+                    faces[i].vertexColors = this.renderData.surface.temperatureColors[i];
+                }
+        
+                this.renderData.surface.geometry.elementsNeedUpdate = true;
+            } else if (this._mode === 'moisture') {
+                for (let i = 0; i < faces.length; i++) {
+                    faces[i].vertexColors = this.renderData.surface.moistureColors[i];
+                }
+        
+                this.renderData.surface.geometry.elementsNeedUpdate = true;
+            }
+        }
     }
     
     buildSurfaceRenderObject() {
@@ -231,37 +370,37 @@ export class Planet {
             const temperatureColors: Color[][] = [];
             const moistureColors: Color[][] = [];
         
-            for(let i = 0; i < this.topology.tiles.length; i++) {
-                const tile = this.topology.tiles[i];
+            for(let i = 0; i < this.topology.tiles().length; i++) {
+                const tile = this.topology.tiles()[i];
         
-                const terrainColor = this.getTerrainColor(tile);
+                const terrainColor = this.getBiomeColor(tile);
                 const plateColor = tile.plate ? this.plates[tile.plate].color.clone() : new Color(0xff0000);
                 const elevationColor = this.getElevationColor(tile);
                 const temperatureColor = this.getTemperatureColor(tile);
                 const moistureColor = this.getMoistureColor(tile);
         
                 const baseIndex = planetGeometry.vertices.length;
-                if (tile.averagePosition) {
-                    planetGeometry.vertices.push(tile.averagePosition);
-                    for (let j = 0; j < tile.corners.length; j++) {
-                        const cornerPosition = this.topology.corners[tile.corners[j]].position;
-                        planetGeometry.vertices.push(cornerPosition);
-                        planetGeometry.vertices.push(tile.averagePosition.clone().sub(cornerPosition).multiplyScalar(0.1).add(cornerPosition));
-            
-                        const i0 = j * 2;
-                        const i1 = ((j + 1) % tile.corners.length) * 2;
-                        if (tile.normal) {
-                            this.buildTileWedge(planetGeometry.faces, baseIndex, i0, i1, tile.normal);
-                        }
-                        this.buildTileWedgeColors(terrainColors, terrainColor, terrainColor.clone().multiplyScalar(0.5));
-                        this.buildTileWedgeColors(plateColors, plateColor, plateColor.clone().multiplyScalar(0.5));
-                        this.buildTileWedgeColors(elevationColors, elevationColor, elevationColor.clone().multiplyScalar(0.5));
-                        this.buildTileWedgeColors(temperatureColors, temperatureColor, temperatureColor.clone().multiplyScalar(0.5));
-                        this.buildTileWedgeColors(moistureColors, moistureColor, moistureColor.clone().multiplyScalar(0.5));
-    
-                        for (let k = planetGeometry.faces.length - 3; k < planetGeometry.faces.length; k++) {
-                            planetGeometry.faces[k].vertexColors = terrainColors[k];
-                        }
+                planetGeometry.vertices.push(tile.position);
+                for (let j = 0; j < this.topology.corners(tile).length; j++) {
+                    const corner = this.topology.corners(tile)[j];
+                    //const elevation = corner.position.clone().normalize().multiplyScalar(corner.elevation * 10);
+                    planetGeometry.vertices.push(corner.position.clone());
+                    planetGeometry.vertices.push(tile.position.clone().sub(corner.position).multiplyScalar(0.1).add(corner.position));
+        
+                    const i0 = j * 2;
+                    const i1 = ((j + 1) % this.topology.corners(tile).length) * 2;
+                    if (tile.normal) {
+                        this.buildTileWedge(planetGeometry.faces, baseIndex, i0, i1, tile.normal);
+                    }
+
+                    this.buildTileWedgeColors(terrainColors, terrainColor, terrainColor.clone().multiplyScalar(0.5));
+                    this.buildTileWedgeColors(plateColors, plateColor, plateColor.clone().multiplyScalar(0.5));
+                    this.buildTileWedgeColors(elevationColors, elevationColor, elevationColor.clone().multiplyScalar(0.5));
+                    this.buildTileWedgeColors(temperatureColors, temperatureColor, temperatureColor.clone().multiplyScalar(0.5));
+                    this.buildTileWedgeColors(moistureColors, moistureColor, moistureColor.clone().multiplyScalar(0.5));
+
+                    for (let k = planetGeometry.faces.length - 3; k < planetGeometry.faces.length; k++) {
+                        planetGeometry.faces[k].vertexColors = terrainColors[k];
                     }
                 }
             }
@@ -297,16 +436,16 @@ export class Planet {
         if (this.topology) {
             const geometry = new Geometry();
         
-            for(let i = 0; i < this.topology.borders.length; i++) {
-                const border = this.topology.borders[i];
+            for(let i = 0; i < this.topology.borders().length; i++) {
+                const border = this.topology.borders()[i];
                 if (border.betweenPlates && border.midpoint) {
                     const normal = border.midpoint.clone().normalize();
                     const offset = normal.clone().multiplyScalar(1);
         
-                    const borderPoint0 = this.topology.corners[border.corners[0]].position;
-                    const borderPoint1 = this.topology.corners[border.corners[1]].position;
-                    const tilePoint0 = this.topology.tiles[border.tiles[0]].averagePosition;
-                    const tilePoint1 = this.topology.tiles[border.tiles[1]].averagePosition;
+                    const borderPoint0 = this.topology.corners(border)[0].position;
+                    const borderPoint1 = this.topology.corners(border)[1].position;
+                    const tilePoint0 = this.topology.tiles(border)[0].position;
+                    const tilePoint1 = this.topology.tiles(border)[1].position;
     
                     if (tilePoint0 && tilePoint1) {
                         const baseIndex = geometry.vertices.length;
@@ -317,8 +456,8 @@ export class Planet {
                         geometry.vertices.push(tilePoint1.clone().sub(borderPoint0).multiplyScalar(0.2).add(borderPoint0).add(offset));
                         geometry.vertices.push(tilePoint1.clone().sub(borderPoint1).multiplyScalar(0.2).add(borderPoint1).add(offset));
             
-                        const pressure = Math.max(-1, Math.min((this.topology.corners[border.corners[0]].pressure + this.topology.corners[border.corners[1]].pressure) / 2, 1));
-                        const shear = Math.max(0, Math.min((this.topology.corners[border.corners[0]].shear + this.topology.corners[border.corners[1]].shear) / 2, 1));
+                        const pressure = Math.max(-1, Math.min((this.topology.corners(border)[0].pressure + this.topology.corners(border)[1].pressure) / 2, 1));
+                        const shear = Math.max(0, Math.min((this.topology.corners(border)[0].shear + this.topology.corners(border)[1].shear) / 2, 1));
                         const innerColor = (pressure <= 0) ? new Color(1 + pressure, 1, 0) : new Color(1, 1 - pressure, 0);
                         const outerColor = new Color(0, shear / 2, shear);
             
@@ -352,16 +491,17 @@ export class Planet {
         if (this.topology) {
             const geometry = new Geometry();
         
-            for(let i = 0; i < this.topology.tiles.length; i++) {
-                const tile = this.topology.tiles[i];
+            for(let i = 0; i < this.topology.tiles().length; i++) {
+                const tile = this.topology.tiles()[i];
                 if (tile.plate) {
                     const plate = this.plates[tile.plate];
-                    const movement = plate.calculateMovement(this.topology.corners, tile.position);
+                    const movement = plate.calculateMovement(this.topology.corners(), tile.position);
                     const plateMovementColor = new Color(1 - plate.color.r, 1 - plate.color.g, 1 - plate.color.b);
             
                     this.buildArrow(geometry, 
                         tile.position.clone().multiplyScalar(1.002), 
                         movement.clone().multiplyScalar(0.5), 
+                        1,
                         Math.min(movement.length(), 4), 
                         plateMovementColor);
             
@@ -388,16 +528,16 @@ export class Planet {
     }
     
     buildAirCurrentsRenderObject() {
-        const corners = this.topology?.corners;
+        const corners = this.topology?.corners();
         if (corners) {
             const geometry = new Geometry();
         
-            for(let i = 0; i < corners.length; i++) {
-                const corner = corners[i];
+            for(const corner of corners) {
                 if (corner.air.speed) {
                     this.buildArrow(geometry, 
                         corner.position.clone().multiplyScalar(1.002), 
-                        corner.air.direction, //.clone().multiplyScalar(0.5), 
+                        corner.air.direction, 
+                        corner.air.speed,
                         Math.min(corner.air.speed, 4),
                         new Color(0xff0000)
                     );
@@ -422,13 +562,50 @@ export class Planet {
         return undefined;
     }
     
-    private buildArrow(geometry: Geometry, position: Vector3, direction: Vector3, width: number, color: Color = new Color(0xffffff)) {
+    buildOceanicCurrentsRenderObject() {
+        const corners = this.topology?.corners();
+        if (corners) {
+            const geometry = new Geometry();
+        
+            for(const corner of corners) {
+                const color = this.getColor(0x002561, 0xff5e00, corner.position.y > 0 ? corner.water.direction.y : corner.water.direction.y * -1);
+
+                if (corner.water.speed) {
+                    this.buildArrow(geometry, 
+                        corner.position.clone().multiplyScalar(1.002), 
+                        corner.water.direction, 
+                        corner.water.speed,
+                        Math.min(corner.water.speed, 4),
+                        color
+                    );
+                }
+            }
+    
+            geometry.computeBoundingSphere();
+            const material = new MeshBasicMaterial({
+                vertexColors: true,
+            });
+            const renderObject = new Mesh(geometry, material);
+    
+            const oceanicCurrents: RenderAirCurrents = {
+                geometry: geometry,
+                material: material,
+                renderObject: renderObject,
+            };
+            
+            return oceanicCurrents;
+        }
+
+        return undefined;
+    }
+    
+    private buildArrow(geometry: Geometry, position: Vector3, direction: Vector3, strength: number, width: number, color: Color = new Color(0xffffff)) {
         if (direction.lengthSq() > 0) {
             const baseIndex = geometry.vertices.length;
 
             const normal = position.clone().multiplyScalar(-1).normalize();
             const offsetX = direction.clone().cross(normal).setLength(width / 2);
-            const offsetY = direction.clone().multiplyScalar(.5);
+            const offsetY = direction.clone().multiplyScalar(strength).multiplyScalar(.5);
 
             geometry.vertices.push(
                 position.clone().add(offsetX).sub(offsetY), 
@@ -448,10 +625,16 @@ export class Planet {
         );
     }
     
-    private buildTileWedgeColors(f: Color[][], c: Color, bc: Color) {
-        f.push([c, c, c]);
-        f.push([bc, bc, c]);
-        f.push([bc, c, c]);
+    private buildTileWedgeColors(f: Color[][], c: Color, bc: Color, index?: number) {
+        if (index === undefined) {
+            f.push([c, c, c]);
+            f.push([bc, bc, c]);
+            f.push([bc, c, c]);
+        } else {
+            f[index] = [c, c, c];
+            f[index + 1] = [bc, bc, c];
+            f[index + 2] = [bc, c, c];
+        }
     }
     
     // private generatePlanetStatistics() {
@@ -468,7 +651,7 @@ export class Planet {
     //         };
         
     //         statistics.corners = {
-    //             count: topology.corners.length,
+    //             count: topology.corners().length,
     //             airCurrent: {
     //                 min: Number.POSITIVE_INFINITY,
     //                 max: Number.NEGATIVE_INFINITY,
@@ -515,7 +698,7 @@ export class Planet {
     //             outerLandBoundaryCount: 0,
     //         };
         
-    //         for (let i = 0; i < topology.corners.length; i++) {
+    //         for (let i = 0; i < topology.corners().length; i++) {
     //             const corner = topology.corners[i];
     //             if (corner.airCurrent) {
     //                 updateMinMaxAvg(statistics.corners.airCurrent, corner.airCurrent.length());
@@ -559,7 +742,7 @@ export class Planet {
     //         statistics.corners.shear.avg /= (statistics.corners.doublePlateBoundaryCount + statistics.corners.triplePlateBoundaryCount);
         
     //         statistics.borders = {
-    //             count: topology.borders.length,
+    //             count: topology.borders().length,
     //             length: {
     //                 min: Number.POSITIVE_INFINITY,
     //                 max: Number.NEGATIVE_INFINITY,
@@ -571,7 +754,7 @@ export class Planet {
     //             landBoundaryPercentage: 0,
     //         };
         
-    //         for (let i = 0; i < topology.borders.length; i++) {
+    //         for (let i = 0; i < topology.borders().length; i++) {
     //             const border = topology.borders[i];
     //             const length = border.length(topology.corners);
     //             updateMinMaxAvg(statistics.borders.length, length);
@@ -593,7 +776,7 @@ export class Planet {
     //         statistics.borders.length.avg /= statistics.borders.count;
         
     //         statistics.tiles = {
-    //             count: topology.tiles.length,
+    //             count: topology.tiles().length,
     //             totalArea: 0,
     //             area: {
     //                 min: Number.POSITIVE_INFINITY,
@@ -627,7 +810,7 @@ export class Planet {
     //             heptagonCount: 0,
     //         };
         
-    //         for (let i = 0; i < topology.tiles.length; i++) {
+    //         for (let i = 0; i < topology.tiles().length; i++) {
     //             const tile = topology.tiles[i];
     //             updateMinMaxAvg(statistics.tiles.area, tile.area);
     //             updateMinMaxAvg(statistics.tiles.elevation, tile.elevation);
